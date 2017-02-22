@@ -7,7 +7,10 @@
 #ifndef ZEROEQ_HTTP_REQUESTHANDLER_H
 #define ZEROEQ_HTTP_REQUESTHANDLER_H
 
+#include "response.h"
+
 #include <boost/network/protocol/http/server.hpp>
+#include <future>
 #include <string>
 
 namespace zeroeq
@@ -25,7 +28,10 @@ struct HTTPRequest
     enum class Method
     {
         PUT,
-        GET
+        GET,
+        POST,
+        PATCH,
+        DELETE
     };
 
     // input from cppnetlib
@@ -34,8 +40,7 @@ struct HTTPRequest
     std::string request;
 
     // output from zeroeq::http::Server
-    HTTPServer::connection::status_t status;
-    std::string reply;
+    std::future< Response > response;
 };
 
 // The handler class called for each incoming HTTP request from cppnetlib
