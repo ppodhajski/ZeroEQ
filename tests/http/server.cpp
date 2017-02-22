@@ -2,16 +2,19 @@
 /* Copyright (c) 2016-2017, Human Brain Project
  *                          Stefan.Eilemann@epfl.ch
  *                          Daniel.Nachbaur@epfl.ch
+ *                          Pawel.Podhajski@epfl.ch
  */
 
 #define BOOST_TEST_MODULE http_server
 
+#include <zeroeq/http/response.h>
 #include <zeroeq/http/server.h>
 #include <zeroeq/subscriber.h>
 #include <zeroeq/uri.h>
 #include <servus/serializable.h>
 #include <servus/uri.h>
 #include <boost/test/unit_test.hpp>
+#include <map>
 #include <thread>
 
 #include <boost/network/protocol/http/client.hpp>
@@ -30,6 +33,17 @@ struct Response
 {
     const ServerReponse::status_type status;
     const std::string body;
+    std::map< const std::string, const std::string > additionalHeaders;
+
+    Response( const ServerReponse::status_type status_,
+              const std::string& body_ )
+        : status{ status_ }, body{ body_ }{}
+
+    Response( const ServerReponse::status_type status_,
+              const std::string& body_,
+              const std::map< const std::string, const std::string > map  )
+        : status{ status_ }, body{ body_ }
+        , additionalHeaders{ map }{}
 };
 
 Response _buildResponse( const std::string& body = std::string( ))
@@ -77,7 +91,7 @@ private:
 };
 
 
-class Client : private HTTPClient
+class Client : public HTTPClient
 {
 public:
     Client( const zeroeq::URI& uri )
@@ -91,22 +105,29 @@ public:
     {
     }
 
+    void check( zeroeq::http::Verb verb, const std::string& request,
+                const std::string& data, const Response& expected,
+                const int line )
+    {
+        _checkImpl( verb, request, data, expected, line );
+    }
+
     void checkGET( const std::string& request,
                    const Response& expected, const int line )
     {
-        _checkImpl( Method::GET, request, "", expected, line );
+        _checkImpl( zeroeq::http::Verb::GET, request, "", expected, line );
     }
 
     void checkPUT( const std::string& request, const std::string& data,
                    const Response& expected, const int line )
     {
-        _checkImpl( Method::PUT, request, data, expected, line );
+        _checkImpl( zeroeq::http::Verb::PUT, request, data, expected, line );
     }
 
     void checkPOST( const std::string& request, const std::string& data,
                     const Response& expected, const int line )
     {
-        _checkImpl( Method::POST, request, data, expected, line );
+        _checkImpl( zeroeq::http::Verb::POST, request, data, expected, line );
     }
 
     void sendGET( const std::string& request )
@@ -118,14 +139,44 @@ public:
 private:
     std::string _baseURL;
 
-    enum class Method
+    response patch( request request, string_type const& body = string_type(),
+            string_type const& content_type = string_type(),
+            body_callback_function_type body_handler =
+            body_callback_function_type(),
+            body_generator_function_type body_generator =
+            body_generator_function_type( ))
     {
-        GET,
-        POST,
-        PUT
-    };
+        namespace bn = boost::network;
+        if (body != string_type())
+        {
+            request << bn::remove_header("Content-Length")
+                    << bn::header("Content-Length",
+                                  std::to_string(body.size( )))
+                    << bn::body(body);
+        }
+        typename bn::http::headers_range<basic_client_facade::request >::type
+            content_type_headers = bn::http::headers( request )["Content-Type"];
+        if (content_type != string_type( ))
+        {
+            if (!boost::empty( content_type_headers ))
+                request << bn::remove_header( "Content-Type" );
+            request << bn::header( "Content-Type", content_type );
+        } else
+        {
+            if (boost::empty( content_type_headers ))
+            {
+                typedef typename bn::char_
+                < http::tags::http_default_8bit_tcp_resolve >::type char_type;
+                static char_type content_arr[] = "x-application/octet-stream";
+                request << bn::header( "Content-Type", content_arr );
+            }
+        }
+        return pimpl->request_skeleton(request, "PATCH", true, body_handler,
+                                       body_generator);
+    }
 
-    void _checkImpl( const Method method, const std::string& request,
+    void _checkImpl( const zeroeq::http::Verb method,
+                     const std::string& request,
                      const std::string& data,
                      const Response& expected, const int line )
     {
@@ -134,14 +185,19 @@ private:
         HTTPClient::response response;
         switch( method )
         {
-        case Method::GET:
+        case zeroeq::http::Verb::GET:
             response = get( request_ );
             break;
-        case Method::POST:
+        case zeroeq::http::Verb::POST:
             response = post( request_, data );
             break;
-        case Method::PUT:
+        case zeroeq::http::Verb::PUT:
             response = put( request_, data );
+            break;
+        case zeroeq::http::Verb::DELETE:
+            response = delete_( request_ );
+        case zeroeq::http::Verb::PATCH:
+            response = patch( request_, data  );
             break;
         }
 
@@ -154,14 +210,14 @@ private:
         expectedHeaders.insert( { "Access-Control-Allow-Headers",
                                   "Content-Type" });
         expectedHeaders.insert( { "Access-Control-Allow-Methods",
-                                  "GET,PUT,OPTIONS" });
+                                  "GET,PUT,POST,PATCH,DELETE,OPTIONS" });
         expectedHeaders.insert( { "Access-Control-Allow-Origin", "*" });
 
-        if( !expected.body.empty( ))
-        {
-            expectedHeaders.insert( std::make_pair( "Content-Length",
-                               std::to_string( expected.body.size( ))));
-        }
+        expectedHeaders.insert( std::make_pair( "Content-Length",
+                                std::to_string( expected.body.size( ))));
+
+        for ( const auto& header : expected.additionalHeaders )
+            expectedHeaders.insert( header );
 
         const auto& responseHeaders = headers( response );
         const size_t responseHeaderSize =
@@ -452,13 +508,221 @@ BOOST_AUTO_TEST_CASE(post)
 {
     bool running = true;
     zeroeq::http::Server server;
-    Foo foo;
-    server.handleGET( foo );
+    server.handle( zeroeq::http::Verb::POST, "test",
+    [ this ]( const std::string& )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::OK };
+        return zeroeq::http::make_ready_future( response );
+    });
 
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
 
     Client client( server.getURI( ));
-    client.checkPOST( "/test/Foo", jsonPut, error405, __LINE__ );
+    client.checkPOST( "/test", jsonPut, response200, __LINE__ );
+
+    running = false;
+    thread.join();
+}
+
+BOOST_AUTO_TEST_CASE(handle_all)
+{
+    bool running = true;
+    zeroeq::http::Server server;
+
+    for ( int verb = int( zeroeq::http::Verb::GET );
+          verb != int( zeroeq::http::Verb::DELETE ); verb++ )
+    {
+        server.handle( zeroeq::http::Verb( verb ), "test",
+                       [ this ]( const std::string& data )
+        {
+            zeroeq::http::Response response{ zeroeq::http::Code::OK };
+            response.payload = data;
+            return zeroeq::http::make_ready_future( response );
+        });
+    }
+    server.handle( zeroeq::http::Verb::GET, "missing",
+                   [ this ]( const std::string& )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::NO_CONTENT };
+        return zeroeq::http::make_ready_future( response );
+    });
+
+    std::thread thread( [&]() { while( running ) server.receive( 100 ); });
+    Client client( server.getURI( ));
+
+    const Response expectedResponse{ ServerReponse::ok, "bar"};
+    for ( int verb = int( zeroeq::http::Verb::POST );
+          verb != int( zeroeq::http::Verb::DELETE ); verb++ )
+    {
+        client.check( zeroeq::http::Verb( verb ), "/test", "bar",
+                      expectedResponse, __LINE__ );
+    }
+
+    const Response expectedResponseGET{ ServerReponse::ok, ""  };
+    client.check( zeroeq::http::Verb::GET, "/test", "",
+                  expectedResponseGET, __LINE__  );
+
+    const Response expectedResponseNegative{ ServerReponse::no_content, ""  };
+    client.check( zeroeq::http::Verb::GET, "/missing", "",
+                  expectedResponseNegative, __LINE__ );
+
+    running = false;
+    thread.join();
+}
+
+
+BOOST_AUTO_TEST_CASE(handle_path)
+{
+    bool running = true;
+    zeroeq::http::Server server;
+
+
+    for ( int verb = int( zeroeq::http::Verb::GET );
+          verb != int( zeroeq::http::Verb::DELETE ); verb++ )
+    {
+        server.handlePath( zeroeq::http::Verb( verb ), "test",
+                           [ this ]( const std::string& path,
+                           const std::string& payload )
+        {
+            zeroeq::http::Response response{ zeroeq::http::Code::OK };
+            response.payload = payload + "_" + path;
+            return zeroeq::http::make_ready_future( response );
+        });
+    }
+
+    std::thread thread( [&]() { while( running ) server.receive( 100 ); });
+    Client client( server.getURI( ));
+
+    const Response expectedResponse{ ServerReponse::ok, "payload_bar/suffix" };
+    for ( int verb = int( zeroeq::http::Verb::POST );
+          verb != int( zeroeq::http::Verb::DELETE ); verb++ )
+    {
+        client.check( zeroeq::http::Verb( verb ), "/test/bar/suffix", "payload",
+                      expectedResponse, __LINE__  );
+    }
+    client.check( zeroeq::http::Verb::GET, "/test/bar/suffix", "",
+                  Response { ServerReponse::ok, "_bar/suffix" }, __LINE__  );
+
+    server.handlePath( zeroeq::http::Verb::GET , "api/object/property",
+                       [ this ]( const std::string& path,
+                       const std::string& )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::OK };
+        response.payload = path;
+        return zeroeq::http::make_ready_future( response );
+    });
+    client.check( zeroeq::http::Verb::GET, "/api/object/property/color", "",
+                  Response { ServerReponse::ok, "color" }, __LINE__  );
+
+    server.handlePath( zeroeq::http::Verb::GET , "api/object/property/color",
+                       [ this ]( const std::string& path,
+                       const std::string& )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::OK };
+        response.payload = path;
+        return zeroeq::http::make_ready_future( response );
+    });
+    client.check( zeroeq::http::Verb::GET, "/api/object/property/color/rgb", "",
+                  Response { ServerReponse::ok, "rgb" }, __LINE__  );
+
+    server.handlePath( zeroeq::http::Verb::GET , "api/object/size/",
+                       [ this ]( const std::string& path,
+                       const std::string& )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::OK };
+        response.payload = path;
+        return zeroeq::http::make_ready_future( response );
+    });
+    client.check( zeroeq::http::Verb::GET, "/api/object/size", "",
+                  Response { ServerReponse::not_found, "" }, __LINE__  );
+
+    server.handlePath( zeroeq::http::Verb::GET , "api/object/dimensions/",
+                       [ this ]( const std::string& path,
+                       const std::string& )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::OK };
+        response.payload = path;
+        return zeroeq::http::make_ready_future( response );
+    });
+    client.check( zeroeq::http::Verb::GET, "/api/object/dimensions/", "",
+                  Response { ServerReponse::ok, "" }, __LINE__  );
+
+    server.handlePath( zeroeq::http::Verb::GET , "api/object",
+                       [ this ]( const std::string& path,
+                       const std::string& )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::OK };
+        response.payload = path;
+        return zeroeq::http::make_ready_future( response );
+    });
+    client.check( zeroeq::http::Verb::GET, "/api/object", "",
+                   Response { ServerReponse::ok, "" }, __LINE__  );
+
+    server.handlePath( zeroeq::http::Verb::GET , "api/generator",
+                       [ this ]( const std::string& path,
+                       const std::string& payload )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::OK };
+        response.payload = path +"_"+payload;
+        return zeroeq::http::make_ready_future( response );
+    });
+    client.check( zeroeq::http::Verb::GET, "/api/generator/thumb?size=4K", "",
+                  Response { ServerReponse::ok, "thumb_size=4K" }, __LINE__  );
+
+    running = false;
+    thread.join();
+}
+
+BOOST_AUTO_TEST_CASE(headers_check)
+{
+    bool running = true;
+    const std::string type = "text/plain";
+    const std::string retry = "60";
+    const std::string modified = "Wed, 21 Oct 2015 07:00:00 GMT";
+    const std::string location = "index.html";
+
+    zeroeq::http::Server server;
+
+    for ( int verb = int( zeroeq::http::Verb::GET );
+          verb != int( zeroeq::http::Verb::DELETE ); verb++ )
+    {
+        server.handlePath( zeroeq::http::Verb( verb ), "test",
+        [ type, retry, modified, location ]( const std::string& path,
+                           const std::string& payload )
+        {
+            zeroeq::http::Response response{ zeroeq::http::Code::OK };
+            response.headers[zeroeq::http::Header::CONTENT_TYPE] = type;
+            response.headers[zeroeq::http::Header::RETRY_AFTER] = retry;
+            response.headers[zeroeq::http::Header::LAST_MODIFIED] = modified;
+            response.headers[zeroeq::http::Header::LOCATION] = location;
+            response.payload = payload + "_" + path;
+            return zeroeq::http::make_ready_future( response );
+        });
+    }
+
+    std::thread thread( [&]() { while( running ) server.receive( 100 ); });
+    Client client( server.getURI( ));
+
+    std::map< const std::string, const std::string > headerMap;
+    headerMap.insert( { "Content-Type", type });
+    headerMap.insert( { "Retry-After", retry });
+    headerMap.insert( { "Last-Modified", modified });
+    headerMap.insert( { "Location", location });
+
+    const Response expectedResponse{ ServerReponse::ok, "payload_bar/suffix",
+                headerMap };
+
+    for ( int verb = int( zeroeq::http::Verb::POST );
+          verb != int( zeroeq::http::Verb::DELETE ); verb++ )
+    {
+        client.check( zeroeq::http::Verb( verb ), "/test/bar/suffix", "payload",
+                      expectedResponse, __LINE__  );
+    }
+
+    const Response expectedResponseGET{ ServerReponse::ok, "_bar/suffix",
+                headerMap };
+    client.check( zeroeq::http::Verb::GET, "/test/bar/suffix", "",
+                  expectedResponseGET, __LINE__  );
 
     running = false;
     thread.join();

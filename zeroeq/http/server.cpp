@@ -2,6 +2,7 @@
 /* Copyright (c) 2016-2017, Human Brain Project
  *                          Stefan.Eilemann@epfl.ch
  *                          Daniel.Nachbaur@epfl.ch
+ *                          Pawel.Podhajski@epfl.ch
  */
 
 #include "server.h"
@@ -18,6 +19,8 @@
 #include <servus/serializable.h>
 
 #include <algorithm>
+#include <array>
+#include <future>
 #include <thread>
 
 namespace
@@ -49,8 +52,8 @@ std::string _replaceAll( std::string subject, const std::string& search,
     size_t pos = 0;
     while( (pos = subject.find( search, pos )) != std::string::npos )
     {
-         subject.replace( pos, search.length(), replace );
-         pos += replace.length();
+        subject.replace( pos, search.length(), replace );
+        pos += replace.length();
     }
     return subject;
 }
@@ -70,6 +73,16 @@ bool _endsWithSchema( const std::string& uri )
         return false;
     return uri.compare( uri.length() - REQUEST_SCHEMA.length(),
                         std::string::npos, REQUEST_SCHEMA ) == 0;
+}
+void _checkAndConvertEndpointName( std::string& endpoint )
+{
+    if( endpoint.empty( ))
+        ZEROEQTHROW( std::runtime_error( "endpoint name cannot be empty" ));
+
+    _convertEndpointName( endpoint );
+    if( endpoint == REQUEST_REGISTRY )
+        ZEROEQTHROW( std::runtime_error(
+                         "'registry' not allowed as endpoint name" ));
 }
 
 } // unnamed namespace
@@ -140,6 +153,18 @@ public:
         }
     }
 
+    void _registerSchema( const std::string& endpoint,
+                          const std::string& schema )
+    {
+        const std::string exist = _returnSchema( endpoint );
+        if( exist.empty( ))
+            _schemas[ endpoint ] = schema;
+        else if( schema != exist )
+            ZEROEQTHROW( std::runtime_error(
+                             "Schema registered for endpoint differs: "
+                             + endpoint  ));
+    }
+
     bool remove( const servus::Serializable& serializable )
     {
         return remove( serializable.getTypeName( ));
@@ -149,42 +174,58 @@ public:
     {
         _convertEndpointName( endpoint );
         _schemas.erase( endpoint );
-        const bool foundPUT = _put.erase( endpoint ) != 0;
-        const bool foundGET = _get.erase( endpoint ) != 0;
+        const bool foundPUT = _methods[int(Verb::PUT)].erase( endpoint ) != 0;
+        const bool foundGET = _methods[int(Verb::GET)].erase( endpoint ) != 0;
         return foundPUT || foundGET;
+    }
+
+    bool handle( const Verb action, std::string endpoint, RESTFunc func )
+    {
+        _checkAndConvertEndpointName( endpoint );
+
+        if( _methods[int(action)].count( endpoint ) != 0 )
+            return false;
+
+        _methods[int(action)][ endpoint ] = func;
+        return true;
+    }
+
+    bool handlePath( const Verb action, std::string endpoint,
+                     RESTPathFunc func )
+    {
+        _checkAndConvertEndpointName( endpoint );
+
+        if( _pathMethods[int(action)].count( endpoint ) != 0 )
+            return false;
+
+        _pathMethods[int(action)][ endpoint ] = func;
+        return true;
     }
 
     bool handlePUT( const std::string& endpoint,
                     servus::Serializable& serializable )
     {
         const auto func = [&serializable]( const std::string& json )
-            { return serializable.fromJSON( json ); };
+        { return serializable.fromJSON( json ); };
         return handlePUT( endpoint, serializable.getSchema(), func );
     }
 
     bool handlePUT( std::string endpoint, const std::string& schema,
                     const PUTPayloadFunc& func )
     {
-        if( endpoint.empty( ))
-            ZEROEQTHROW( std::runtime_error( "endpoint name cannot be empty" ));
-
-        _convertEndpointName( endpoint );
-        if( endpoint == REQUEST_REGISTRY )
-            ZEROEQTHROW( std::runtime_error(
-                             "'registry' not allowed as endpoint name" ));;
-
-        if( _put.count( endpoint ) != 0 )
+        _checkAndConvertEndpointName( endpoint );
+        if( _methods[int(Verb::PUT)].count( endpoint ) != 0 )
             return false;
 
-        _put[ endpoint ] = func;
+
+        RESTFunc futureFunc = [ func ]( const std::string& param )
         {
-            const std::string& exist = _returnSchema( endpoint );
-            if( exist.empty( ))
-                _schemas[ endpoint ] = schema;
-            else if( schema != exist )
-                ZEROEQTHROW( std::runtime_error(
-                       "Schema registered for endpoint differs: " + endpoint ));
-        }
+            const auto code = func( param ) ? Code::OK : Code::BAD_REQUEST;
+            return make_ready_future( Response{ code } );
+        };
+        _methods[int(Verb::PUT)][ endpoint ] = futureFunc;
+        _registerSchema( endpoint, schema );
+
         return true;
     }
 
@@ -198,28 +239,19 @@ public:
     bool handleGET( std::string endpoint, const std::string& schema,
                     const GETFunc& func )
     {
-        if( endpoint.empty( ))
-            ZEROEQTHROW( std::runtime_error( "endpoint name cannot be empty" ));
+        _checkAndConvertEndpointName( endpoint );
 
-        _convertEndpointName( endpoint );
-        if( endpoint == REQUEST_REGISTRY )
-            ZEROEQTHROW( std::runtime_error(
-                             "'registry' not allowed as endpoint name" ));
-
-        if( _get.count( endpoint ) != 0 )
+        if( _methods[int(Verb::GET)].count( endpoint ) != 0 )
             return false;
 
-        _get[ endpoint ] = func;
-        if( !schema.empty( ))
+        RESTFunc futureFunc = [ func ]( const std::string& )
         {
-            const std::string& exist = _returnSchema( endpoint );
-            if( exist.empty( ))
-                _schemas[ endpoint ] = schema;
-            else if( schema != exist )
-                ZEROEQTHROW( std::runtime_error(
-                       "Schema registered for endpoint differs: " + endpoint ));
+            return make_ready_future( Response{ Code::OK, func() } );
+        };
+        _methods[int(Verb::GET)][ endpoint ] = futureFunc;
 
-        }
+        if( !schema.empty( ))
+            _registerSchema( endpoint, schema );
         return true;
     }
 
@@ -243,19 +275,28 @@ public:
         ::zmq_recv( socket, &request, sizeof( request ), 0 );
         if( !request )
             ZEROEQTHROW( std::runtime_error(
-                           "Could not receive HTTP request from HTTP server" ));
+                             "Could not receive HTTP request from HTTP server" ));
 
         switch( request->method )
         {
         case HTTPRequest::Method::GET:
-            _processGET( *request );
+            _processRequest( *request, Verb::GET );
             break;
         case HTTPRequest::Method::PUT:
-            _processPUT( *request );
+            _processRequest( *request, Verb::PUT );
+            break;
+        case HTTPRequest::Method::POST:
+            _processRequest( *request, Verb::POST );
+            break;
+        case HTTPRequest::Method::PATCH:
+            _processRequest( *request, Verb::PATCH );
+            break;
+        case HTTPRequest::Method::DELETE:
+            _processRequest( *request, Verb::DELETE );
             break;
         default:
             ZEROEQTHROW( std::runtime_error(
-                            "Encountered invalid HTTP method to process: " +
+                             "Encountered invalid HTTP method to process: " +
                              std::to_string( int( request->method ))));
         }
 
@@ -265,12 +306,14 @@ public:
 
 protected:
     // key stores endpoints lower-case, hyphenated with '/' separators
-    typedef std::map< std::string, PUTPayloadFunc > PUTFuncMap;
-    typedef std::map< std::string, GETFunc > GETFuncMap;
+    typedef std::map< std::string, RESTFunc > FuncMap;
+    typedef std::map< std::string, RESTPathFunc, std::greater< std::string >>
+                                                               PathFuncMap;
     typedef std::map< std::string, std::string > SchemaMap;
-    PUTFuncMap _put;
-    GETFuncMap _get;
+
     SchemaMap _schemas;
+    std::array<FuncMap, 5> _methods;
+    std::array<PathFuncMap, 5> _pathMethods;
 
     RequestHandler _requestHandler;
     HTTPServer::options _httpOptions;
@@ -303,11 +346,16 @@ protected:
     std::string _returnRegistry() const
     {
         Json::Value body( Json::objectValue );
-        for( const auto& i : _get )
+        for( const auto& i : _methods[int(Verb::GET)] )
             body[i.first].append( "GET" );
-        for( const auto& i : _put )
+        for( const auto& i : _methods[int(Verb::PUT)] )
             body[i.first].append( "PUT" );
-
+        for( const auto& i : _methods[int(Verb::POST)] )
+            body[i.first].append( "POST" );
+        for( const auto& i : _methods[int(Verb::DELETE)] )
+            body[i.first].append( "DELETE" );
+        for( const auto& i : _methods[int(Verb::PATCH)] )
+            body[i.first].append( "PATCH" );
         return body.toStyledString();
     }
 
@@ -317,52 +365,68 @@ protected:
         return i != _schemas.end() ? i->second : std::string();
     }
 
-    void _processGET( HTTPRequest& request )
+    Response _getSchemaResponse( const std::string& endpoint ) const
     {
-        request.status = HTTPServer::connection::ok; // be optimistic
+        const auto it = _schemas.find( endpoint );
+        if( it == _schemas.end( ))
+            return Response{ Code::NOT_FOUND };
+        return Response{ Code::OK, it->second };
+    }
+
+    void _processRequest( HTTPRequest& request, Verb verb )
+    {
+        const auto& funcMap = _methods[int(verb)];
+        const auto& pathFuncMap = _pathMethods[int(verb)];
 
         const std::string& endpoint = _getEndpoint( request.url );
-        const auto& i = _get.find( endpoint );
-        if( i != _get.end( ))
+        const auto kv = funcMap.find( endpoint );
+        if( kv != funcMap.end( ))
         {
-            request.reply = i->second();
+            request.response = kv->second( request.request );
             return;
         }
 
-        if( endpoint == REQUEST_REGISTRY )
+        const auto it = std::find_if( pathFuncMap.begin(), pathFuncMap.end(),
+        [&endpoint]( const std::pair<std::string, RESTPathFunc>& pair )
         {
-            request.reply = _returnRegistry();
-            return;
-        }
 
-        if( _endsWithSchema( endpoint ))
+            const auto& prefix = pair.first;
+            if( prefix == endpoint )
+                return true;
+            return endpoint.find( prefix + "/" ) == 0;
+        });
+
+        if( it != pathFuncMap.end( ))
         {
-            const auto& schema = _returnSchema( endpoint.substr( 0,
-                                                 endpoint.find_last_of( '/' )));
-            if( !schema.empty( ))
+            const auto& prefix = it->first;
+            if( prefix == endpoint )
             {
-                request.reply = schema;
+                request.response = it->second( "", request.request );
+                return;
+            }
+            const auto path = endpoint.substr( prefix.size() + 1,
+                                               endpoint.size( ));
+            request.response = it->second( path, request.request );
+            return;
+        }
+
+        if( verb == Verb::GET)
+        {
+            if( endpoint == REQUEST_REGISTRY )
+            {
+                Response response{ Code::OK, _returnRegistry() };
+                request.response = make_ready_future( response );
+                return;
+            }
+
+            if( _endsWithSchema( endpoint ))
+            {
+                const auto key = endpoint.substr( 0, endpoint.find_last_of( '/' ));
+                request.response = make_ready_future( _getSchemaResponse( key ));
                 return;
             }
         }
-
-        request.status = HTTPServer::connection::not_found;
-    }
-
-    void _processPUT( HTTPRequest& request )
-    {
-        const std::string& endpoint = _getEndpoint( request.url );
-        const auto& i = _put.find( endpoint );
-
-        if( i == _put.end( ))
-            request.status = HTTPServer::connection::not_found;
-        else
-        {
-            if( i->second( request.request ))
-                request.status = HTTPServer::connection::ok;
-            else
-                request.status = HTTPServer::connection::bad_request;
-        }
+        request.response = make_ready_future( Response{ Code::NOT_FOUND } );
     }
 };
 
@@ -452,6 +516,18 @@ SocketDescriptor Server::getSocketDescriptor() const
 bool Server::handle( const std::string& endpoint, servus::Serializable& object )
 {
     return handlePUT( endpoint, object ) && handleGET( endpoint, object );
+}
+
+bool Server::handle( const Verb action, const std::string& endpoint,
+                     RESTFunc func )
+{
+    return _impl->handle( action,  endpoint, func );
+}
+
+bool Server::handlePath( const Verb action, const std::string& endpoint,
+                         RESTPathFunc func )
+{
+    return _impl->handlePath( action, endpoint, func );
 }
 
 bool Server::remove( const servus::Serializable& object )
