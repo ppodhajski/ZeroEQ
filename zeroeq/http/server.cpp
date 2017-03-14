@@ -404,8 +404,9 @@ protected:
                 request.response = it->second( "", request.request );
                 return;
             }
-            const auto path = endpoint.substr( prefix.size() + 1,
-                                               endpoint.size( ));
+            const auto requestUrl = request.url.substr(1);
+            const auto path = requestUrl.substr( prefix.size() + 1,
+                                                 endpoint.size( ));
             request.response = it->second( path, request.request );
             return;
         }
