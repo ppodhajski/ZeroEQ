@@ -31,18 +31,18 @@ int _getContentLength( const HTTPServer::request& request )
     return 0;
 }
 
-HTTPRequest::Method _getMethodType( const std::string& methodName )
+Method _getMethodType( const std::string& methodName )
 {
     if( methodName == "PUT" )
-        return HTTPRequest::Method::PUT;
+        return Method::PUT;
     if( methodName == "GET" )
-        return HTTPRequest::Method::GET;
+        return Method::GET;
     if( methodName == "POST" )
-        return HTTPRequest::Method::POST;
+        return Method::POST;
     if( methodName == "PATCH" )
-        return HTTPRequest::Method::PATCH;
+        return Method::PATCH;
     if( methodName == "DELETE" )
-        return HTTPRequest::Method::DELETE;
+        return Method::DELETE;
     throw std::invalid_argument( "Method not supported" );
 }
 
@@ -77,7 +77,7 @@ struct ConnectionHandler : std::enable_shared_from_this< ConnectionHandler >
         try
         {
             const auto method = _getMethodType( _request.method );
-            if( method != HTTPRequest::Method::GET )
+            if( method != Method::GET )
             {
                 _size = _getContentLength( _request );
                 // if we have payload, schedule an (async) read of all chunks.
@@ -101,7 +101,7 @@ struct ConnectionHandler : std::enable_shared_from_this< ConnectionHandler >
 
 private:
     void _readChunk( HTTPServer::connection_ptr connection,
-                     HTTPRequest::Method method )
+                     const Method method )
     {
         namespace pl = std::placeholders;
         connection->read( std::bind( &ConnectionHandler::_handleChunk,
@@ -113,7 +113,7 @@ private:
     void _handleChunk( HTTPServer::connection::input_range range,
                        const boost::system::error_code error, const size_t size,
                        HTTPServer::connection_ptr connection,
-                       HTTPRequest::Method method )
+                       const Method method )
     {
         if( error )
         {
@@ -130,15 +130,14 @@ private:
             _handleRequest( method, connection );
     }
 
-    void _handleRequest( const HTTPRequest::Method& method,
+    void _handleRequest( const Method method,
                          HTTPServer::connection_ptr connection )
     {
-        HTTPRequest httpRequest;
+        Request httpRequest;
         httpRequest.method = method;
         const auto uri = URI( _request.destination );
-        httpRequest.request = method == HTTPRequest::Method::GET ?
-                                          uri.getQuery() : _body;
-        httpRequest.url = uri.getPath();
+        httpRequest.body = _body;
+        httpRequest.path = uri.getPath();
         void* httpRequestPtr = &httpRequest;
         zmq_send( _socket, &httpRequestPtr, sizeof(void*), 0 );
         bool done;
@@ -161,7 +160,7 @@ private:
 
         HTTPServer::response_header contentLength;
         contentLength.name = "Content-Length";
-        contentLength.value = std::to_string( response.payload.length( ));
+        contentLength.value = std::to_string( response.body.length( ));
         headers.push_back( contentLength );
 
         for( auto it = response.headers.begin(); it != response.headers.end();
@@ -175,7 +174,7 @@ private:
         const auto status = HTTPServer::connection::status_t( response.code );
         connection->set_status( status );
         connection->set_headers( headers );
-        connection->write( response.payload );
+        connection->write( response.body );
     }
 
     void _addCorsHeaders( std::vector< HTTPServer::response_header >& headers )

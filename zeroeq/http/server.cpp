@@ -25,6 +25,15 @@
 
 namespace
 {
+/** @return ready future wrapping the value passed. */
+template<typename T>
+std::future<T> make_ready_future( const T value )
+{
+    std::promise<T> promise;
+    promise.set_value( value );
+    return promise.get_future();
+}
+
 // Transform camelCase to hyphenated-notation, e.g.
 // lexis/render/LookOut -> lexis/render/look-out
 // Inspiration: https://gist.github.com/rodamber/2558e25d4d8f6b9f2ffdf7bd49471340
@@ -74,6 +83,7 @@ bool _endsWithSchema( const std::string& uri )
     return uri.compare( uri.length() - REQUEST_SCHEMA.length(),
                         std::string::npos, REQUEST_SCHEMA ) == 0;
 }
+
 void _checkAndConvertEndpointName( std::string& endpoint )
 {
     if( endpoint.empty( ))
@@ -153,8 +163,8 @@ public:
         }
     }
 
-    void _registerSchema( const std::string& endpoint,
-                          const std::string& schema )
+    void registerSchema( const std::string& endpoint,
+                         const std::string& schema )
     {
         const std::string exist = _returnSchema( endpoint );
         if( exist.empty( ))
@@ -174,12 +184,12 @@ public:
     {
         _convertEndpointName( endpoint );
         _schemas.erase( endpoint );
-        const bool foundPUT = _methods[int(Verb::PUT)].erase( endpoint ) != 0;
-        const bool foundGET = _methods[int(Verb::GET)].erase( endpoint ) != 0;
+        const bool foundPUT = _methods[int(Method::PUT)].erase( endpoint ) != 0;
+        const bool foundGET = _methods[int(Method::GET)].erase( endpoint ) != 0;
         return foundPUT || foundGET;
     }
 
-    bool handle( const Verb action, std::string endpoint, RESTFunc func )
+    bool handle( const Method action, std::string endpoint, RESTFunc func )
     {
         _checkAndConvertEndpointName( endpoint );
 
@@ -190,7 +200,7 @@ public:
         return true;
     }
 
-    bool handlePath( const Verb action, std::string endpoint,
+    bool handlePath( const Method action, std::string endpoint,
                      RESTPathFunc func )
     {
         _checkAndConvertEndpointName( endpoint );
@@ -206,7 +216,7 @@ public:
                     servus::Serializable& serializable )
     {
         const auto func = [&serializable]( const std::string& json )
-        { return serializable.fromJSON( json ); };
+            { return serializable.fromJSON( json ); };
         return handlePUT( endpoint, serializable.getSchema(), func );
     }
 
@@ -214,18 +224,16 @@ public:
                     const PUTPayloadFunc& func )
     {
         _checkAndConvertEndpointName( endpoint );
-        if( _methods[int(Verb::PUT)].count( endpoint ) != 0 )
-            return false;
-
-
-        RESTFunc futureFunc = [ func ]( const std::string& param )
+        const auto futureFunc = [ func ]( const std::string& param )
         {
             const auto code = func( param ) ? Code::OK : Code::BAD_REQUEST;
             return make_ready_future( Response{ code } );
         };
-        _methods[int(Verb::PUT)][ endpoint ] = futureFunc;
-        _registerSchema( endpoint, schema );
 
+        if( !handle( Method::PUT, endpoint, futureFunc ))
+            return false;
+
+        registerSchema( endpoint, schema );
         return true;
     }
 
@@ -240,18 +248,17 @@ public:
                     const GETFunc& func )
     {
         _checkAndConvertEndpointName( endpoint );
-
-        if( _methods[int(Verb::GET)].count( endpoint ) != 0 )
-            return false;
-
-        RESTFunc futureFunc = [ func ]( const std::string& )
+        const auto futureFunc = [ func ]( const std::string& )
         {
             return make_ready_future( Response{ Code::OK, func() } );
         };
-        _methods[int(Verb::GET)][ endpoint ] = futureFunc;
+
+        if( !handle( Method::GET, endpoint, futureFunc ))
+            return false;
 
         if( !schema.empty( ))
-            _registerSchema( endpoint, schema );
+            registerSchema( endpoint, schema );
+
         return true;
     }
 
@@ -271,34 +278,13 @@ public:
 
     void process()
     {
-        HTTPRequest* request = nullptr;
+        Request* request = nullptr;
         ::zmq_recv( socket, &request, sizeof( request ), 0 );
         if( !request )
             ZEROEQTHROW( std::runtime_error(
                              "Could not receive HTTP request from HTTP server" ));
 
-        switch( request->method )
-        {
-        case HTTPRequest::Method::GET:
-            _processRequest( *request, Verb::GET );
-            break;
-        case HTTPRequest::Method::PUT:
-            _processRequest( *request, Verb::PUT );
-            break;
-        case HTTPRequest::Method::POST:
-            _processRequest( *request, Verb::POST );
-            break;
-        case HTTPRequest::Method::PATCH:
-            _processRequest( *request, Verb::PATCH );
-            break;
-        case HTTPRequest::Method::DELETE:
-            _processRequest( *request, Verb::DELETE );
-            break;
-        default:
-            ZEROEQTHROW( std::runtime_error(
-                             "Encountered invalid HTTP method to process: " +
-                             std::to_string( int( request->method ))));
-        }
+       _processRequest( *request, request->method );
 
         bool done = true;
         ::zmq_send( socket, &done, sizeof( done ), 0 );
@@ -312,8 +298,8 @@ protected:
     typedef std::map< std::string, std::string > SchemaMap;
 
     SchemaMap _schemas;
-    std::array<FuncMap, 5> _methods;
-    std::array<PathFuncMap, 5> _pathMethods;
+    std::array<FuncMap, size_t( Method::ALL )> _methods;
+    std::array<PathFuncMap, size_t( Method::ALL )> _pathMethods;
 
     RequestHandler _requestHandler;
     HTTPServer::options _httpOptions;
@@ -346,15 +332,15 @@ protected:
     std::string _returnRegistry() const
     {
         Json::Value body( Json::objectValue );
-        for( const auto& i : _methods[int(Verb::GET)] )
+        for( const auto& i : _methods[int(Method::GET)] )
             body[i.first].append( "GET" );
-        for( const auto& i : _methods[int(Verb::PUT)] )
+        for( const auto& i : _methods[int(Method::PUT)] )
             body[i.first].append( "PUT" );
-        for( const auto& i : _methods[int(Verb::POST)] )
+        for( const auto& i : _methods[int(Method::POST)] )
             body[i.first].append( "POST" );
-        for( const auto& i : _methods[int(Verb::DELETE)] )
+        for( const auto& i : _methods[int(Method::DELETE)] )
             body[i.first].append( "DELETE" );
-        for( const auto& i : _methods[int(Verb::PATCH)] )
+        for( const auto& i : _methods[int(Method::PATCH)] )
             body[i.first].append( "PATCH" );
         return body.toStyledString();
     }
@@ -373,16 +359,16 @@ protected:
         return Response{ Code::OK, it->second };
     }
 
-    void _processRequest( HTTPRequest& request, Verb verb )
+    void _processRequest( Request& request, const Method method )
     {
-        const auto& funcMap = _methods[int(verb)];
-        const auto& pathFuncMap = _pathMethods[int(verb)];
+        const auto& funcMap = _methods[int(method)];
+        const auto& pathFuncMap = _pathMethods[int(method)];
 
-        const std::string& endpoint = _getEndpoint( request.url );
+        const std::string& endpoint = _getEndpoint( request.path );
         const auto kv = funcMap.find( endpoint );
         if( kv != funcMap.end( ))
         {
-            request.response = kv->second( request.request );
+            request.response = kv->second( request.body );
             return;
         }
 
@@ -401,17 +387,17 @@ protected:
             const auto& prefix = it->first;
             if( prefix == endpoint )
             {
-                request.response = it->second( "", request.request );
+                request.response = it->second( std::string(), request.body );
                 return;
             }
-            const auto requestUrl = request.url.substr(1);
-            const auto path = requestUrl.substr( prefix.size() + 1,
+            const auto pathUrl = request.path.substr(1);
+            const auto path = pathUrl.substr( prefix.size() + 1,
                                                  endpoint.size( ));
-            request.response = it->second( path, request.request );
+            request.response = it->second( path, request.body );
             return;
         }
 
-        if( verb == Verb::GET)
+        if( method == Method::GET)
         {
             if( endpoint == REQUEST_REGISTRY )
             {
@@ -519,13 +505,13 @@ bool Server::handle( const std::string& endpoint, servus::Serializable& object )
     return handlePUT( endpoint, object ) && handleGET( endpoint, object );
 }
 
-bool Server::handle( const Verb action, const std::string& endpoint,
+bool Server::handle( const Method action, const std::string& endpoint,
                      RESTFunc func )
 {
-    return _impl->handle( action,  endpoint, func );
+    return _impl->handle( action, endpoint, func );
 }
 
-bool Server::handlePath( const Verb action, const std::string& endpoint,
+bool Server::handlePath( const Method action, const std::string& endpoint,
                          RESTPathFunc func )
 {
     return _impl->handlePath( action, endpoint, func );
