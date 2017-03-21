@@ -1,14 +1,15 @@
 
-/* Copyright (c) 2016, Human Brain Project
- *                     Stefan.Eilemann@epfl.ch
+/* Copyright (c) 2016-2017, Human Brain Project
+ *                          Stefan.Eilemann@epfl.ch
  */
 
 #ifndef ZEROEQ_HTTP_SERVER_H
 #define ZEROEQ_HTTP_SERVER_H
 
-#include "response.h"
-
 #include <zeroeq/http/api.h>
+#include <zeroeq/http/response.h> // used inline
+#include <zeroeq/http/types.h>
+
 #include <zeroeq/receiver.h> // base class
 #include <zeroeq/log.h>
 
@@ -17,23 +18,6 @@ namespace zeroeq
 /** HTTP protocol support. */
 namespace http
 {
-
-/**
- * HTTP REST callback with payload, returning a Response future.
- * The string is the request's payload or a query string of a GET request
- */
-using RESTFunc = std::function< std::future< Response >( const std::string& ) >;
-
-/**
- * HTTP REST callback for a given path returning a Response future.
- * The first string provides the url part after the registered endpoint:
- * "api/windows/jf321f" -> "jf321f".
- * The second is the request's payload or a query string of a GET request
- * If the string matches the registered endpoint pass empty string as
- * path: "api/windows/ -> ""
- */
-using RESTPathFunc = std::function< std::future< Response >( const std::string&,
-                                                         const std::string& ) >;
 
 /**
  * Serves HTTP GET and PUT requests for servus::Serializable objects.
@@ -113,12 +97,11 @@ public:
     //@}
 
     /** Handle a single action on a given endpoint. */
-    bool handle( zeroeq::http::Verb action, const std::string& endpoint,
-                 zeroeq::http::RESTFunc func );
+    bool handle( Method action, const std::string& endpoint, RESTFunc func );
 
     /** Handle a single action on a given endpoint derived from the path . */
-    bool handlePath( zeroeq::http::Verb action, const std::string& endpoint,
-                     zeroeq::http::RESTPathFunc func );
+    bool handlePath( Method action, const std::string& endpoint,
+                     RESTPathFunc func );
 
     /** @name Object registration for PUT and GET requests */
     //@{

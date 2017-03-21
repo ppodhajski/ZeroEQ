@@ -7,11 +7,11 @@
 #ifndef ZEROEQ_HTTP_REQUESTHANDLER_H
 #define ZEROEQ_HTTP_REQUESTHANDLER_H
 
-#include "response.h"
+#include <zeroeq/http/response.h> // member
+#include <zeroeq/http/request.h> // member
 
 #include <boost/network/protocol/http/server.hpp>
 #include <future>
-#include <string>
 
 namespace zeroeq
 {
@@ -23,21 +23,12 @@ typedef boost::network::http::server< RequestHandler > HTTPServer;
 
 // Contains in/out values for an HTTP request to exchange information between
 // cppnetlib and zeroeq::http::Server
-struct HTTPRequest
+struct Request
 {
-    enum class Method
-    {
-        PUT,
-        GET,
-        POST,
-        PATCH,
-        DELETE
-    };
-
     // input from cppnetlib
     Method method;
-    std::string url;
-    std::string request;
+    std::string path;
+    std::string body;
 
     // output from zeroeq::http::Server
     std::future< Response > response;
