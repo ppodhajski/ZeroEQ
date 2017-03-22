@@ -5,7 +5,7 @@
 #ifndef ZEROEQ_HTTP_RESPONSE_H
 #define ZEROEQ_HTTP_RESPONSE_H
 
-#include <map> // member
+#include <map>    // member
 #include <string> // member
 
 namespace zeroeq
@@ -51,7 +51,7 @@ enum Code
 };
 
 /**
- * Response to an HTTPRequest.
+ * Response to an HTTP Request.
  */
 struct Response
 {
@@ -64,9 +64,9 @@ struct Response
     /** HTTP message headers. */
     std::map< Header, std::string > headers;
 
-
     /** Construct a Response with a given return code and payload. */
-    Response( const Code code_ = Code::OK, const std::string& body_ = std::string() )
+    Response( const Code code_ = Code::OK,
+              const std::string& body_ = std::string( ))
         : code { code_ }, body{ body_ } {}
 };
 
