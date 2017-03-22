@@ -2,7 +2,9 @@
 
 set(ZEROEQHTTP_PUBLIC_HEADERS
   server.h
+  request.h
   response.h
+  types.h
 )
 set(ZEROEQHTTP_HEADERS
   requestHandler.h
