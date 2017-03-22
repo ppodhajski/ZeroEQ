@@ -7,17 +7,31 @@
 #define ZEROEQ_HTTP_SERVER_H
 
 #include <zeroeq/http/api.h>
+#include <zeroeq/http/request.h>
 #include <zeroeq/http/response.h> // used inline
-#include <zeroeq/http/types.h>
 
 #include <zeroeq/receiver.h> // base class
 #include <zeroeq/log.h>
+
+#include <future>
 
 namespace zeroeq
 {
 /** HTTP protocol support. */
 namespace http
 {
+
+/** HTTP PUT callback w/o payload, return reply success. */
+using PUTFunc = std::function< bool() >;
+
+/** HTTP PUT callback w/ JSON payload, return reply success. */
+using PUTPayloadFunc = std::function< bool( const std::string& ) >;
+
+/** HTTP GET callback to return JSON reply. */
+using GETFunc = std::function< std::string() >;
+
+/** HTTP REST callback with Request parameter returning a Response future. */
+using RESTFunc = std::function< std::future< Response >( const Request& ) >;
 
 /**
  * Serves HTTP GET and PUT requests for servus::Serializable objects.
@@ -98,10 +112,6 @@ public:
 
     /** Handle a single action on a given endpoint. */
     bool handle( Method action, const std::string& endpoint, RESTFunc func );
-
-    /** Handle a single action on a given endpoint derived from the path . */
-    bool handlePath( Method action, const std::string& endpoint,
-                     RESTPathFunc func );
 
     /** @name Object registration for PUT and GET requests */
     //@{

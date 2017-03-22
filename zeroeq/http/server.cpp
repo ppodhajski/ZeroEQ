@@ -68,9 +68,9 @@ std::string _replaceAll( std::string subject, const std::string& search,
 }
 
 // convert name to lowercase with '/' separators instead of '::'
-void _convertEndpointName( std::string& endpoint )
+std::string _convertEndpointName( const std::string& endpoint )
 {
-    endpoint = _camelCaseToHyphenated( _replaceAll( endpoint, "::", "/" ));
+    return _camelCaseToHyphenated( _replaceAll( endpoint, "::", "/" ));
 }
 
 const std::string REQUEST_REGISTRY = "registry";
@@ -84,12 +84,11 @@ bool _endsWithSchema( const std::string& uri )
                         std::string::npos, REQUEST_SCHEMA ) == 0;
 }
 
-void _checkAndConvertEndpointName( std::string& endpoint )
+void _checkEndpointName( const std::string& endpoint )
 {
     if( endpoint.empty( ))
         ZEROEQTHROW( std::runtime_error( "endpoint name cannot be empty" ));
 
-    _convertEndpointName( endpoint );
     if( endpoint == REQUEST_REGISTRY )
         ZEROEQTHROW( std::runtime_error(
                          "'registry' not allowed as endpoint name" ));
@@ -166,7 +165,7 @@ public:
     void registerSchema( const std::string& endpoint,
                          const std::string& schema )
     {
-        const std::string exist = _returnSchema( endpoint );
+        const std::string exist = getSchema( endpoint );
         if( exist.empty( ))
             _schemas[ endpoint ] = schema;
         else if( schema != exist )
@@ -175,14 +174,19 @@ public:
                              + endpoint  ));
     }
 
-    bool remove( const servus::Serializable& serializable )
+    std::string getSchema( const std::string& endpoint ) const
     {
-        return remove( serializable.getTypeName( ));
+        const auto& i = _schemas.find( endpoint );
+        return i != _schemas.end() ? i->second : std::string();
     }
 
-    bool remove( std::string endpoint )
+    bool remove( const servus::Serializable& serializable )
     {
-        _convertEndpointName( endpoint );
+        return remove( _convertEndpointName( serializable.getTypeName( )));
+    }
+
+    bool remove( const std::string& endpoint )
+    {
         _schemas.erase( endpoint );
         const bool foundPUT = _methods[int(Method::PUT)].erase( endpoint ) != 0;
         const bool foundGET = _methods[int(Method::GET)].erase( endpoint ) != 0;
@@ -191,24 +195,12 @@ public:
 
     bool handle( const Method action, std::string endpoint, RESTFunc func )
     {
-        _checkAndConvertEndpointName( endpoint );
+        _checkEndpointName( endpoint );
 
         if( _methods[int(action)].count( endpoint ) != 0 )
             return false;
 
         _methods[int(action)][ endpoint ] = func;
-        return true;
-    }
-
-    bool handlePath( const Method action, std::string endpoint,
-                     RESTPathFunc func )
-    {
-        _checkAndConvertEndpointName( endpoint );
-
-        if( _pathMethods[int(action)].count( endpoint ) != 0 )
-            return false;
-
-        _pathMethods[int(action)][ endpoint ] = func;
         return true;
     }
 
@@ -223,10 +215,11 @@ public:
     bool handlePUT( std::string endpoint, const std::string& schema,
                     const PUTPayloadFunc& func )
     {
-        _checkAndConvertEndpointName( endpoint );
-        const auto futureFunc = [ func ]( const std::string& param )
+        _checkEndpointName( endpoint );
+        const auto futureFunc = [ func ]( const Request& request )
         {
-            const auto code = func( param ) ? Code::OK : Code::BAD_REQUEST;
+            const auto code = func( request.body ) ? Code::OK :
+                                                     Code::BAD_REQUEST;
             return make_ready_future( Response{ code } );
         };
 
@@ -247,8 +240,8 @@ public:
     bool handleGET( std::string endpoint, const std::string& schema,
                     const GETFunc& func )
     {
-        _checkAndConvertEndpointName( endpoint );
-        const auto futureFunc = [ func ]( const std::string& )
+        _checkEndpointName( endpoint );
+        const auto futureFunc = [ func ]( const Request& )
         {
             return make_ready_future( Response{ Code::OK, func() } );
         };
@@ -262,12 +255,6 @@ public:
         return true;
     }
 
-    std::string getSchema( std::string endpoint ) const
-    {
-        _convertEndpointName( endpoint );
-        return _returnSchema( endpoint );
-    }
-
     void addSockets( std::vector< detail::Socket >& entries )
     {
         detail::Socket entry;
@@ -278,13 +265,13 @@ public:
 
     void process()
     {
-        Request* request = nullptr;
-        ::zmq_recv( socket, &request, sizeof( request ), 0 );
-        if( !request )
+        Message* message = nullptr;
+        ::zmq_recv( socket, &message, sizeof( message ), 0 );
+        if( !message )
             ZEROEQTHROW( std::runtime_error(
                              "Could not receive HTTP request from HTTP server" ));
 
-       _processRequest( *request, request->method );
+       _processRequest( *message );
 
         bool done = true;
         ::zmq_send( socket, &done, sizeof( done ), 0 );
@@ -292,14 +279,13 @@ public:
 
 protected:
     // key stores endpoints lower-case, hyphenated with '/' separators
-    typedef std::map< std::string, RESTFunc > FuncMap;
-    typedef std::map< std::string, RESTPathFunc, std::greater< std::string >>
-                                                               PathFuncMap;
+    // must be an ordered map in order to iterate from the most specific path
+    typedef std::map< std::string, RESTFunc, 
+                      std::greater< std::string >> FuncMap;
     typedef std::map< std::string, std::string > SchemaMap;
 
     SchemaMap _schemas;
     std::array<FuncMap, size_t( Method::ALL )> _methods;
-    std::array<PathFuncMap, size_t( Method::ALL )> _pathMethods;
 
     RequestHandler _requestHandler;
     HTTPServer::options _httpOptions;
@@ -321,14 +307,6 @@ protected:
         return inprocURI.str();
     }
 
-    std::string _getEndpoint( const std::string& url )
-    {
-        if( url.size() < 2 )
-            return url;
-
-        return _camelCaseToHyphenated( url.substr( 1 ));
-    }
-
     std::string _returnRegistry() const
     {
         Json::Value body( Json::objectValue );
@@ -345,12 +323,6 @@ protected:
         return body.toStyledString();
     }
 
-    std::string _returnSchema( const std::string& endpoint ) const
-    {
-        const auto& i = _schemas.find( endpoint );
-        return i != _schemas.end() ? i->second : std::string();
-    }
-
     Response _getSchemaResponse( const std::string& endpoint ) const
     {
         const auto it = _schemas.find( endpoint );
@@ -359,61 +331,67 @@ protected:
         return Response{ Code::OK, it->second };
     }
 
-    void _processRequest( Request& request, const Method method )
+    std::string _removeEndpointFromPath( const std::string& endpoint,
+                                         const std::string& path )
     {
-        const auto& funcMap = _methods[int(method)];
-        const auto& pathFuncMap = _pathMethods[int(method)];
+        if( endpoint.size() >= path.size( ))
+            return std::string();
 
-        const std::string& endpoint = _getEndpoint( request.path );
-        const auto kv = funcMap.find( endpoint );
-        if( kv != funcMap.end( ))
+        return path.substr( endpoint.size() + 1, path.size( ));
+    }
+
+    void _processRequest( Message& message )
+    {
+        const auto method = message.request.method;
+//      remove leading '/' except for request to '/'
+        const std::string path = ( message.request.path != "/" ) ?
+                   message.request.path.substr( 1 ) : message.request.path;
+
+        if( method == Method::GET )
         {
-            request.response = kv->second( request.body );
-            return;
-        }
-
-        const auto it = std::find_if( pathFuncMap.begin(), pathFuncMap.end(),
-        [&endpoint]( const std::pair<std::string, RESTPathFunc>& pair )
-        {
-
-            const auto& prefix = pair.first;
-            if( prefix == endpoint )
-                return true;
-            return endpoint.find( prefix + "/" ) == 0;
-        });
-
-        if( it != pathFuncMap.end( ))
-        {
-            const auto& prefix = it->first;
-            if( prefix == endpoint )
-            {
-                request.response = it->second( std::string(), request.body );
-                return;
-            }
-            const auto pathUrl = request.path.substr(1);
-            const auto path = pathUrl.substr( prefix.size() + 1,
-                                                 endpoint.size( ));
-            request.response = it->second( path, request.body );
-            return;
-        }
-
-        if( method == Method::GET)
-        {
-            if( endpoint == REQUEST_REGISTRY )
+            if( path == REQUEST_REGISTRY )
             {
                 Response response{ Code::OK, _returnRegistry() };
-                request.response = make_ready_future( response );
+                message.response = make_ready_future( response );
                 return;
             }
 
-            if( _endsWithSchema( endpoint ))
+            if( _endsWithSchema( path ))
             {
-                const auto key = endpoint.substr( 0, endpoint.find_last_of( '/' ));
-                request.response = make_ready_future( _getSchemaResponse( key ));
-                return;
+                const auto key = path.substr( 0, path.find_last_of( '/' ));
+                const auto response = _getSchemaResponse( key );
+                if( response.code == http::Code::OK )
+                {
+                    message.response = make_ready_future( response );
+                    return;
+                }
             }
         }
-        request.response = make_ready_future( Response{ Code::NOT_FOUND } );
+
+        const auto& funcMap = _methods[int(method)];
+        const auto it = std::find_if( funcMap.begin(), funcMap.end(),
+                                      [&path]( const FuncMap::value_type& pair )
+        {
+            return path.find( pair.first ) == 0;
+        });
+
+        if( it == funcMap.end( ))
+        {
+            message.response = make_ready_future( Response{ Code::NOT_FOUND } );
+            return;
+        }
+
+        const auto& endpoint = it->first;
+        const auto& func = it->second;
+        const auto pathStripped = _removeEndpointFromPath( endpoint,
+                                                    message.request.path );
+        if( pathStripped.empty() || *endpoint.rbegin() == '/' )
+        {
+            message.request.path = pathStripped;
+            message.response = func( message.request );
+            return;
+        }
+        message.response = make_ready_future( Response{ Code::NOT_FOUND } );
     }
 };
 
@@ -511,12 +489,6 @@ bool Server::handle( const Method action, const std::string& endpoint,
     return _impl->handle( action, endpoint, func );
 }
 
-bool Server::handlePath( const Method action, const std::string& endpoint,
-                         RESTPathFunc func )
-{
-    return _impl->handlePath( action, endpoint, func );
-}
-
 bool Server::remove( const servus::Serializable& object )
 {
     return _impl->remove( object );
@@ -529,7 +501,8 @@ bool Server::remove( const std::string& endpoint )
 
 bool Server::handlePUT( servus::Serializable& object )
 {
-    return _impl->handlePUT( object.getTypeName(), object );
+    return _impl->handlePUT( _convertEndpointName( object.getTypeName( )),
+                             object );
 }
 
 bool Server::handlePUT( const std::string& endpoint,
@@ -565,7 +538,8 @@ bool Server::handlePUT( const std::string& endpoint,const std::string& schema,
 
 bool Server::handleGET( const servus::Serializable& object )
 {
-    return _impl->handleGET( object.getTypeName(), object );
+    return _impl->handleGET(  _convertEndpointName( object.getTypeName( )),
+                              object );
 }
 
 bool Server::handleGET( const std::string& endpoint,
@@ -587,7 +561,8 @@ bool Server::handleGET( const std::string& endpoint, const std::string& schema,
 
 std::string Server::getSchema( const servus::Serializable& object ) const
 {
-    return _impl->getSchema( object.getTypeName( ));
+    const auto endpoint = _convertEndpointName( object.getTypeName( ));
+    return _impl->getSchema( endpoint );
 }
 
 std::string Server::getSchema( const std::string& endpoint ) const

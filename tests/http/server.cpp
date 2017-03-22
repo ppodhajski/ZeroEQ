@@ -7,6 +7,7 @@
 
 #define BOOST_TEST_MODULE http_server
 
+#include <zeroeq/http/helpers.h>
 #include <zeroeq/http/request.h>
 #include <zeroeq/http/response.h>
 #include <zeroeq/http/server.h>
@@ -117,11 +118,11 @@ public:
     {
     }
 
-    void check( zeroeq::http::Method verb, const std::string& request,
+    void check( zeroeq::http::Method method, const std::string& request,
                 const std::string& data, const Response& expected,
                 const int line )
     {
-        _checkImpl( verb, request, data, expected, line );
+        _checkImpl( method, request, data, expected, line );
     }
 
     void checkGET( const std::string& request,
@@ -414,7 +415,7 @@ BOOST_AUTO_TEST_CASE(get_serializable)
     client.checkGET( "/unknown", error404, __LINE__ );
     BOOST_CHECK( !foo.getNotified( ));
 
-    client.checkGET( "/test/Foo", _buildResponse( jsonGet ), __LINE__ );
+    client.checkGET( "/test/foo", _buildResponse( jsonGet ), __LINE__ );
     BOOST_CHECK( foo.getNotified( ));
 
     running = false;
@@ -427,7 +428,7 @@ BOOST_AUTO_TEST_CASE(get_event)
     zeroeq::http::Server server;
 
     bool requested = false;
-    server.handleGET( "test::Foo", [&](){ requested = true; return jsonGet; } );
+    server.handleGET( "test/foo", [&](){ requested = true; return jsonGet; } );
 
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
 
@@ -440,7 +441,7 @@ BOOST_AUTO_TEST_CASE(get_event)
     client.checkGET( "/", error404, __LINE__ );
     BOOST_CHECK( !requested );
 
-    client.checkGET( "/test/Foo", _buildResponse( jsonGet ), __LINE__ );
+    client.checkGET( "/test/foo", _buildResponse( jsonGet ), __LINE__ );
     BOOST_CHECK( requested );
 
     running = false;
@@ -461,8 +462,8 @@ BOOST_AUTO_TEST_CASE(shared)
     Client client1( server1.getURI( ));
     Client client2( server2.getURI( ));
 
-    client1.checkGET( "/test/Foo", error404, __LINE__ );
-    client2.checkGET( "/test/Foo", _buildResponse( jsonGet ), __LINE__ );
+    client1.checkGET( "/test/foo", error404, __LINE__ );
+    client2.checkGET( "/test/foo", _buildResponse( jsonGet ), __LINE__ );
 
     running = false;
     thread.join();
@@ -480,12 +481,12 @@ BOOST_AUTO_TEST_CASE(put_serializable)
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
 
     Client client( server.getURI( ));
-    client.checkPUT( "/test/Foo", "", error400, __LINE__ );
-    client.checkPUT( "/test/Foo", "Foo", error400, __LINE__ );
-    client.checkPUT( "/test/Bar", jsonPut, error404, __LINE__ );
+    client.checkPUT( "/test/foo", "", error400, __LINE__ );
+    client.checkPUT( "/test/foo", "Foo", error400, __LINE__ );
+    client.checkPUT( "/test/bar", jsonPut, error404, __LINE__ );
     BOOST_CHECK( !foo.getNotified( ));
 
-    client.checkPUT( "/test/Foo", jsonPut, response200, __LINE__ );
+    client.checkPUT( "/test/foo", jsonPut, response200, __LINE__ );
     BOOST_CHECK( foo.getNotified( ));
 
     running = false;
@@ -507,7 +508,7 @@ BOOST_AUTO_TEST_CASE(put_event)
     Client client( server.getURI( ));
     client.checkPUT( "/foo", "", error400, __LINE__ );
     client.checkPUT( "/foo", "Foo", error400, __LINE__ );
-    client.checkPUT( "/test/Bar", jsonPut, error404, __LINE__ );
+    client.checkPUT( "/test/bar", jsonPut, error404, __LINE__ );
     client.checkPUT( "/foo", jsonPut, response200, __LINE__ );
     client.checkPUT( "/empty", " ", response200, __LINE__ );
     BOOST_CHECK( receivedEmpty );
@@ -521,10 +522,10 @@ BOOST_AUTO_TEST_CASE(post)
     bool running = true;
     zeroeq::http::Server server;
     server.handle( zeroeq::http::Method::POST, "test",
-    [ this ]( const std::string& )
+    [this]( const zeroeq::http::Request& )
     {
         zeroeq::http::Response response{ zeroeq::http::Code::OK };
-        return make_ready_future( response );
+        return zeroeq::http::make_ready_future( response );
     });
 
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
@@ -541,32 +542,32 @@ BOOST_AUTO_TEST_CASE(handle_all)
     bool running = true;
     zeroeq::http::Server server;
 
-    for ( int verb = int( zeroeq::http::Method::GET );
-          verb != int( zeroeq::http::Method::DELETE ); verb++ )
+    for ( int method = int( zeroeq::http::Method::GET );
+          method != int( zeroeq::http::Method::DELETE ); ++method )
     {
-        server.handle( zeroeq::http::Method( verb ), "test",
-                       [ this ]( const std::string& data )
+        server.handle( zeroeq::http::Method( method ), "test",
+	               [this]( const zeroeq::http::Request& request )
         {
             zeroeq::http::Response response{ zeroeq::http::Code::OK };
-            response.body = data;
-            return make_ready_future( response );
+            response.body = request.body;
+            return zeroeq::http::make_ready_future( response );
         });
     }
     server.handle( zeroeq::http::Method::GET, "missing",
-                   [ this ]( const std::string& )
+                   [this]( const zeroeq::http::Request& )
     {
         zeroeq::http::Response response{ zeroeq::http::Code::NO_CONTENT };
-        return make_ready_future( response );
+        return zeroeq::http::make_ready_future( response );
     });
 
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
     Client client( server.getURI( ));
 
     const Response expectedResponse{ ServerReponse::ok, "bar"};
-    for ( int verb = int( zeroeq::http::Method::POST );
-          verb != int( zeroeq::http::Method::DELETE ); verb++ )
+    for ( int method = int( zeroeq::http::Method::POST );
+          method != int( zeroeq::http::Method::DELETE ); ++method )
     {
-        client.check( zeroeq::http::Method( verb ), "/test", "bar",
+        client.check( zeroeq::http::Method( method ), "/test", "bar",
                       expectedResponse, __LINE__ );
     }
 
@@ -582,93 +583,112 @@ BOOST_AUTO_TEST_CASE(handle_all)
     thread.join();
 }
 
+BOOST_AUTO_TEST_CASE(handle_root)
+{
+    bool running = true;
+    zeroeq::http::Server server;
+
+    server.handle( zeroeq::http::Method::GET, "/",
+                   [this]( const zeroeq::http::Request& )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::OK };
+        response.body = "homepage";
+        return zeroeq::http::make_ready_future( response );
+    });
+
+    std::thread thread( [&]() { while( running ) server.receive( 100 ); });
+    Client client( server.getURI( ));
+
+    const Response expectedResponse{ ServerReponse::ok, "homepage"};
+    client.check( zeroeq::http::Method::GET, "/", "", expectedResponse,
+                  __LINE__  );
+
+    running = false;
+    thread.join();
+}
 
 BOOST_AUTO_TEST_CASE(handle_path)
 {
     bool running = true;
     zeroeq::http::Server server;
 
-
-    for ( int verb = int( zeroeq::http::Method::GET );
-          verb != int( zeroeq::http::Method::DELETE ); verb++ )
+    for ( int method = int( zeroeq::http::Method::GET );
+          method != int( zeroeq::http::Method::DELETE ); ++method )
     {
-        server.handlePath( zeroeq::http::Method( verb ), "test",
-                           [ this ]( const std::string& path,
-                           const std::string& payload )
+        server.handle( zeroeq::http::Method( method ), "test/",
+                       [this]( const zeroeq::http::Request& request )
         {
             zeroeq::http::Response response{ zeroeq::http::Code::OK };
-            response.body = payload + "_" + path;
-            return make_ready_future( response );
+            response.body = request.body + "_" + request.path;
+            return zeroeq::http::make_ready_future( response );
         });
     }
 
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
     Client client( server.getURI( ));
 
-    const Response expectedResponse{ ServerReponse::ok, "payload_bar/suffix" };
-    for ( int verb = int( zeroeq::http::Method::POST );
-          verb != int( zeroeq::http::Method::DELETE ); verb++ )
+    const Response expectedResponse{ ServerReponse::ok, "payload_path/suffix" };
+    for ( int method = int( zeroeq::http::Method::POST );
+          method != int( zeroeq::http::Method::DELETE ); ++method )
     {
-        client.check( zeroeq::http::Method( verb ), "/test/bar/suffix", "payload",
-                      expectedResponse, __LINE__  );
+        client.check( zeroeq::http::Method( method ), "/test/path/suffix",
+                      "payload", expectedResponse, __LINE__ );
     }
-    client.check( zeroeq::http::Method::GET, "/test/bar/suffix", "",
-                  Response { ServerReponse::ok, "_bar/suffix" }, __LINE__  );
+    client.check( zeroeq::http::Method::GET, "/test/path/suffix", "",
+                  Response { ServerReponse::ok, "_path/suffix" }, __LINE__ );
 
-    server.handlePath( zeroeq::http::Method::GET , "api/object/property",
-                       [ this ]( const std::string& path,
-                       const std::string& )
+    server.handle( zeroeq::http::Method::GET , "api/object/property/",
+                   [this]( const zeroeq::http::Request& request )
     {
         zeroeq::http::Response response{ zeroeq::http::Code::OK };
-        response.body = path;
-        return make_ready_future( response );
+        response.body = request.path;
+        return zeroeq::http::make_ready_future( response );
     });
     client.check( zeroeq::http::Method::GET, "/api/object/property/color", "",
-                  Response { ServerReponse::ok, "color" }, __LINE__  );
+                  Response { ServerReponse::ok, "color" }, __LINE__ );
 
-    server.handlePath( zeroeq::http::Method::GET , "api/object/property/color",
-                       [ this ]( const std::string& path,
-                       const std::string& )
+    server.handle( zeroeq::http::Method::GET , "api/object/property/color/",
+                   [this]( const zeroeq::http::Request& request )
     {
         zeroeq::http::Response response{ zeroeq::http::Code::OK };
-        response.body = path;
-        return make_ready_future( response );
+        response.body = request.path;
+        return zeroeq::http::make_ready_future( response );
     });
-    client.check( zeroeq::http::Method::GET, "/api/object/property/color/rgb", "",
-                  Response { ServerReponse::ok, "rgb" }, __LINE__  );
 
-    server.handlePath( zeroeq::http::Method::GET , "api/object/size/",
-                       [ this ]( const std::string& path,
-                       const std::string& )
+    client.check( zeroeq::http::Method::GET, "/api/object/property/color/rgb",
+                  "", Response { ServerReponse::ok, "rgb" }, __LINE__ );
+
+    server.handle( zeroeq::http::Method::GET , "api/object/size/",
+                   [this]( const zeroeq::http::Request& request )
     {
         zeroeq::http::Response response{ zeroeq::http::Code::OK };
-        response.body = path;
-        return make_ready_future( response );
+        response.body = request.path;
+        return zeroeq::http::make_ready_future( response );
     });
+
     client.check( zeroeq::http::Method::GET, "/api/object/size", "",
-                  Response { ServerReponse::not_found, "" }, __LINE__  );
+                  Response { ServerReponse::not_found, "" }, __LINE__ );
 
-    server.handlePath( zeroeq::http::Method::GET , "api/object/dimensions/",
-                       [ this ]( const std::string& path,
-                       const std::string& )
+    server.handle( zeroeq::http::Method::GET , "api/object/dimensions/",
+                   [this]( const zeroeq::http::Request& request )
     {
         zeroeq::http::Response response{ zeroeq::http::Code::OK };
-        response.body = path;
-        return make_ready_future( response );
+        response.body = request.path;
+        return zeroeq::http::make_ready_future( response );
     });
     client.check( zeroeq::http::Method::GET, "/api/object/dimensions/", "",
-                  Response { ServerReponse::ok, "" }, __LINE__  );
+                  Response { ServerReponse::ok, "" }, __LINE__ );
 
-    server.handlePath( zeroeq::http::Method::GET , "api/object",
-                       [ this ]( const std::string& path,
-                       const std::string& )
+    server.handle( zeroeq::http::Method::GET , "api/object/",
+                   [this]( const zeroeq::http::Request& request )
+
     {
         zeroeq::http::Response response{ zeroeq::http::Code::OK };
-        response.body = path;
-        return make_ready_future( response );
+        response.body = request.path;
+        return zeroeq::http::make_ready_future( response );
     });
-    client.check( zeroeq::http::Method::GET, "/api/object", "",
-                   Response { ServerReponse::ok, "" }, __LINE__  );
+    client.check( zeroeq::http::Method::GET, "/api/object/", "",
+                  Response { ServerReponse::ok, "" }, __LINE__ );
 
     running = false;
     thread.join();
@@ -684,20 +704,20 @@ BOOST_AUTO_TEST_CASE(headers_check)
 
     zeroeq::http::Server server;
 
-    for ( int verb = int( zeroeq::http::Method::GET );
-          verb != int( zeroeq::http::Method::DELETE ); verb++ )
+    for ( int method = int( zeroeq::http::Method::GET );
+          method != int( zeroeq::http::Method::DELETE ); ++method )
     {
-        server.handlePath( zeroeq::http::Method( verb ), "test",
-        [ type, retry, modified, location ]( const std::string& path,
-                           const std::string& payload )
+        server.handle( zeroeq::http::Method( method ), "test/",
+        [ type, retry, modified, location ]( const zeroeq::http::Request&
+                                             request)
         {
             zeroeq::http::Response response{ zeroeq::http::Code::OK };
             response.headers[zeroeq::http::Header::CONTENT_TYPE] = type;
             response.headers[zeroeq::http::Header::RETRY_AFTER] = retry;
             response.headers[zeroeq::http::Header::LAST_MODIFIED] = modified;
             response.headers[zeroeq::http::Header::LOCATION] = location;
-            response.body = payload + "_" + path;
-            return make_ready_future( response );
+            response.body = request.body + "_" + request.path;
+            return zeroeq::http::make_ready_future( response );
         });
     }
 
@@ -710,20 +730,21 @@ BOOST_AUTO_TEST_CASE(headers_check)
     headerMap.insert( { "Last-Modified", modified });
     headerMap.insert( { "Location", location });
 
-    const Response expectedResponse{ ServerReponse::ok, "payload_bar/suffix",
-                headerMap };
+    const Response expectedResponse{ ServerReponse::ok, "payload_path/suffix",
+                                     headerMap };
 
-    for ( int verb = int( zeroeq::http::Method::POST );
-          verb != int( zeroeq::http::Method::DELETE ); verb++ )
+    for ( int method = int( zeroeq::http::Method::POST );
+          method != int( zeroeq::http::Method::DELETE ); ++method )
     {
-        client.check( zeroeq::http::Method( verb ), "/test/bar/suffix", "payload",
-                      expectedResponse, __LINE__  );
+        client.check( zeroeq::http::Method( method ),
+                      "/test/path/suffix", "payload", expectedResponse,
+                      __LINE__ );
     }
 
     const Response expectedResponseGET{ ServerReponse::ok, "_bar/suffix",
                 headerMap };
     client.check( zeroeq::http::Method::GET, "/test/bar/suffix", "",
-                  expectedResponseGET, __LINE__  );
+                  expectedResponseGET, __LINE__ );
 
     running = false;
     thread.join();
@@ -739,7 +760,7 @@ BOOST_AUTO_TEST_CASE(largeGet)
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
 
     Client client( server.getURI( ));
-    const auto request = std::string( "/test/Foo?" ) + std::string( 4096, 'o' );
+    const auto request = std::string( "/test/foo?" ) + std::string( 4096, 'o' );
     client.checkGET( request, _buildResponse( jsonGet ), __LINE__ );
 
     running = false;
@@ -758,7 +779,7 @@ BOOST_AUTO_TEST_CASE(issue157)
     // Close client before receiving request to provoke #157
     {
         Client client( server.getURI( ));
-        const auto request = std::string( "/test/Foo?" ) +
+        const auto request = std::string( "/test/foo?" ) +
                              std::string( 4096, 'o' );
         client.sendGET( request );
     }
@@ -773,12 +794,17 @@ BOOST_AUTO_TEST_CASE(urlcasesensitivity)
     zeroeq::http::Server server;
     Foo foo;
     server.handleGET( foo );
+    server.handleGET( "BlA/CamelCase", [] { return std::string(); } );
 
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
 
     Client client( server.getURI( ));
-    client.checkGET( "/TEST/FOO", _buildResponse( jsonGet ), __LINE__ );
+    client.checkGET( "/TEST/FOO", error404, __LINE__ );
     client.checkGET( "/test/foo", _buildResponse( jsonGet ), __LINE__ );
+
+    client.checkGET( "/BlA/CamelCase", response200, __LINE__ );
+    client.checkGET( "/bla/camelcase", error404, __LINE__ );
+    client.checkGET( "/bla/camel-case", error404, __LINE__ );
 
     running = false;
     thread.join();
@@ -832,6 +858,7 @@ BOOST_AUTO_TEST_CASE(object_schema)
     client.checkGET( "/test/foo/schema",
                      _buildResponse( "{\n  '_notified' : 'bool'\n}" ),
                      __LINE__ );
+    client.checkGET( "/test/Foo/schema", error404, __LINE__ );
     client.checkGET( "/test/foo/schema/schema", error404, __LINE__ );
 
     running = false;
@@ -844,15 +871,28 @@ BOOST_AUTO_TEST_CASE(event_schema)
     const std::string schema = "{ \"value\" : \"boolean\" }";
     server.handleGET( "bla/bar", schema,
                       [] { return std::string( "{ \"value\" : true }"); } );
-    server.handlePUT( "bla/foo", schema,
+    server.handlePUT( "bla/FOO", schema,
                       [] { return true; });
+    server.handle( zeroeq::http::Method::GET, "bla/boo/",
+                   [this]( const zeroeq::http::Request& )
+    {
+        zeroeq::http::Response response{ zeroeq::http::Code::OK };
+        return zeroeq::http::make_ready_future( response );
+    });
 
     bool running = true;
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
 
     Client client( server.getURI( ));
     client.checkGET( "/bla/bar/schema", _buildResponse( schema ), __LINE__ );
-    client.checkGET( "/bla/foo/schema", _buildResponse( schema ), __LINE__ );
+    client.checkGET( "/bla/Bar/schema", error404, __LINE__ );
+
+    client.checkGET( "/bla/FOO/schema", _buildResponse( schema ), __LINE__ );
+    client.checkGET( "/bla/foo/schema", error404, __LINE__ );
+
+    client.checkGET( "/bla/boo/", response200, __LINE__ );
+    client.checkGET( "/bla/boo/schema", response200, __LINE__ );
+    client.checkGET( "/bla/boo/info", response200, __LINE__ );
 
     running = false;
     thread.join();
@@ -920,16 +960,17 @@ BOOST_AUTO_TEST_CASE(event_registry_name)
 BOOST_AUTO_TEST_CASE(event_schema_name)
 {
     zeroeq::http::Server server;
-    BOOST_CHECK( server.handleGET( "schema", "dummy_schema",
+    BOOST_CHECK( server.handleGET( "object", "dummy_schema",
                                    [] { return std::string( "bar" ); } ));
-    BOOST_CHECK( server.handlePUT( "schema", "dummy_schema",
+
+    BOOST_CHECK( server.handlePUT( "object", "dummy_schema",
                                    [] { return true; } ));
     bool running = true;
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
 
     Client client( server.getURI( ));
-    client.checkGET( "/schema", _buildResponse( "bar" ), __LINE__ );
-    client.checkGET( "/schema/schema", _buildResponse( "dummy_schema" ),
+    client.checkGET( "/object", _buildResponse( "bar" ), __LINE__ );
+    client.checkGET( "/object/schema", _buildResponse( "dummy_schema" ),
                      __LINE__ );
 
     running = false;
@@ -946,7 +987,7 @@ BOOST_AUTO_TEST_CASE(multiple_event_name_for_same_object)
     foo.registerDeserializedCallback( [&]{ foo.setNotified(); });
 
     server.handleGET( foo );
-    server.handlePUT( "test/camelBar", foo );
+    server.handlePUT( "test/camel-bar", foo );
 
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
 

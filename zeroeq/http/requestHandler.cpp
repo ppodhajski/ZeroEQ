@@ -133,20 +133,22 @@ private:
     void _handleRequest( const Method method,
                          HTTPServer::connection_ptr connection )
     {
-        Request httpRequest;
-        httpRequest.method = method;
+        Message message;
+        message.request.method = method;
         const auto uri = URI( _request.destination );
-        httpRequest.body = _body;
-        httpRequest.path = uri.getPath();
-        void* httpRequestPtr = &httpRequest;
-        zmq_send( _socket, &httpRequestPtr, sizeof(void*), 0 );
+        message.request.path = uri.getPath();
+        message.request.query = uri.getQuery();
+        message.request.body.swap( _body );
+
+        void* messagePtr = &message;
+        zmq_send( _socket, &messagePtr, sizeof( void* ), 0 );
         bool done;
         zmq_recv( _socket, &done, sizeof( done ), 0 );
 
         Response response;
         try
         {
-            response = httpRequest.response.get();
+            response = message.response.get();
         }
         catch( std::future_error& error )
         {

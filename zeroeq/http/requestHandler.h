@@ -23,12 +23,10 @@ typedef boost::network::http::server< RequestHandler > HTTPServer;
 
 // Contains in/out values for an HTTP request to exchange information between
 // cppnetlib and zeroeq::http::Server
-struct Request
+struct Message
 {
-    // input from cppnetlib
-    Method method;
-    std::string path;
-    std::string body;
+    // input from cppnetlib and updated in server.cpp
+    Request request;
 
     // output from zeroeq::http::Server
     std::future< Response > response;
