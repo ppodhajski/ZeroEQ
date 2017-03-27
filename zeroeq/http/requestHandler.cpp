@@ -33,12 +33,12 @@ int _getContentLength( const HTTPServer::request& request )
 
 Method _getMethodType( const std::string& methodName )
 {
-    if( methodName == "PUT" )
-        return Method::PUT;
     if( methodName == "GET" )
         return Method::GET;
     if( methodName == "POST" )
         return Method::POST;
+    if( methodName == "PUT" )
+        return Method::PUT;
     if( methodName == "PATCH" )
         return Method::PATCH;
     if( methodName == "DELETE" )
@@ -50,14 +50,16 @@ std::string _headerEnumToString( const Header header )
 {
     switch( header )
     {
-    case Header::LOCATION:
-        return "Location";
-    case Header::LAST_MODIFIED:
-        return "Last-Modified";
-    case Header::RETRY_AFTER:
-        return "Retry-After";
+    case Header::ALLOW:
+        return "Allow";
     case Header::CONTENT_TYPE:
         return "Content-Type";
+    case Header::LAST_MODIFIED:
+        return "Last-Modified";
+    case Header::LOCATION:
+        return "Location";
+    case Header::RETRY_AFTER:
+        return "Retry-After";
     default:
         throw std::logic_error( "no such header" );
     }
@@ -195,7 +197,7 @@ private:
 
         HTTPServer::response_header allowMethods;
         allowMethods.name = "Access-Control-Allow-Methods";
-        allowMethods.value = "GET,PUT,POST,PATCH,DELETE,OPTIONS";
+        allowMethods.value = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 
         HTTPServer::response_header allowOrigin;
         allowOrigin.name = "Access-Control-Allow-Origin";

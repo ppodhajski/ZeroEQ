@@ -16,10 +16,11 @@ namespace http
 /** HTTP headers which can be used in a Response. */
 enum class Header
 {
-    LOCATION,
-    RETRY_AFTER,
+    ALLOW,
+    CONTENT_TYPE,
     LAST_MODIFIED,
-    CONTENT_TYPE
+    LOCATION,
+    RETRY_AFTER
 };
 
 /** HTTP codes to be used in a Response. */
@@ -67,7 +68,15 @@ struct Response
     /** Construct a Response with a given return code and payload. */
     Response( const Code code_ = Code::OK,
               const std::string& body_ = std::string( ))
-        : code { code_ }, body{ body_ } {}
+        : code{ code_ }, body{ body_ } {}
+
+    /** Construct a Response with a given code, payload and content type. */
+    Response( const Code code_, const std::string& body_,
+              const std::string& contentType )
+        : code{ code_ }
+        , body{ body_ }
+        , headers{{ Header::CONTENT_TYPE, contentType }}
+    {}
 };
 
 }
