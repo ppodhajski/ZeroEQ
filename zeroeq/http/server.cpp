@@ -3,10 +3,12 @@
  *                          Stefan.Eilemann@epfl.ch
  *                          Daniel.Nachbaur@epfl.ch
  *                          Pawel.Podhajski@epfl.ch
+ *                          Raphael.Dumusc@epfl.ch
  */
 
 #include "server.h"
 
+#include "helpers.h"
 #include "requestHandler.h"
 
 #include "../log.h"
@@ -25,19 +27,10 @@
 
 namespace
 {
-/** @return ready future wrapping the value passed. */
-template<typename T>
-std::future<T> make_ready_future( const T value )
-{
-    std::promise<T> promise;
-    promise.set_value( value );
-    return promise.get_future();
-}
-
 // Transform camelCase to hyphenated-notation, e.g.
 // lexis/render/LookOut -> lexis/render/look-out
 // Inspiration: https://gist.github.com/rodamber/2558e25d4d8f6b9f2ffdf7bd49471340
-std::string _camelCaseToHyphenated( std::string camelCase )
+std::string _camelCaseToHyphenated( const std::string& camelCase )
 {
     if( camelCase.empty( ))
         return camelCase;
@@ -73,16 +66,9 @@ std::string _convertEndpointName( const std::string& endpoint )
     return _camelCaseToHyphenated( _replaceAll( endpoint, "::", "/" ));
 }
 
+const std::string JSON_TYPE = "application/json";
 const std::string REQUEST_REGISTRY = "registry";
 const std::string REQUEST_SCHEMA = "schema";
-
-bool _endsWithSchema( const std::string& uri )
-{
-    if( uri.length() < REQUEST_SCHEMA.length( ))
-        return false;
-    return uri.compare( uri.length() - REQUEST_SCHEMA.length(),
-                        std::string::npos, REQUEST_SCHEMA ) == 0;
-}
 
 void _checkEndpointName( const std::string& endpoint )
 {
@@ -92,6 +78,23 @@ void _checkEndpointName( const std::string& endpoint )
     if( endpoint == REQUEST_REGISTRY )
         ZEROEQTHROW( std::runtime_error(
                          "'registry' not allowed as endpoint name" ));
+}
+
+bool _endsWithSchema( const std::string& uri )
+{
+    if( uri.length() < REQUEST_SCHEMA.length( ))
+        return false;
+    return uri.compare( uri.length() - REQUEST_SCHEMA.length(),
+                        std::string::npos, REQUEST_SCHEMA ) == 0;
+}
+
+std::string _removeEndpointFromPath( const std::string& endpoint,
+                                     const std::string& path )
+{
+    if( endpoint.size() >= path.size( ))
+        return std::string();
+
+    return path.substr( endpoint.size( ));
 }
 
 } // unnamed namespace
@@ -182,25 +185,32 @@ public:
 
     bool remove( const servus::Serializable& serializable )
     {
-        return remove( _convertEndpointName( serializable.getTypeName( )));
-    }
-
-    bool remove( const std::string& endpoint )
-    {
+        const auto endpoint = _convertEndpointName( serializable.getTypeName());
         _schemas.erase( endpoint );
         const bool foundPUT = _methods[int(Method::PUT)].erase( endpoint ) != 0;
         const bool foundGET = _methods[int(Method::GET)].erase( endpoint ) != 0;
         return foundPUT || foundGET;
     }
 
-    bool handle( const Method action, std::string endpoint, RESTFunc func )
+    bool remove( const std::string& endpoint )
+    {
+        _schemas.erase( endpoint );
+        bool foundMethod = false;
+        for( auto& method : _methods )
+            if( method.erase( endpoint ) != 0 )
+                foundMethod = true;
+        return foundMethod;
+    }
+
+    bool handle( const Method method, const std::string& endpoint,
+                 RESTFunc func )
     {
         _checkEndpointName( endpoint );
 
-        if( _methods[int(action)].count( endpoint ) != 0 )
+        if( _methods[int(method)].count( endpoint ) != 0 )
             return false;
 
-        _methods[int(action)][ endpoint ] = func;
+        _methods[int(method)][endpoint] = func;
         return true;
     }
 
@@ -212,17 +222,17 @@ public:
         return handlePUT( endpoint, serializable.getSchema(), func );
     }
 
-    bool handlePUT( std::string endpoint, const std::string& schema,
+    bool handlePUT( const std::string& endpoint, const std::string& schema,
                     const PUTPayloadFunc& func )
     {
         _checkEndpointName( endpoint );
-        const auto futureFunc = [ func ]( const Request& request )
+
+        const auto futureFunc = [func]( const Request& request )
         {
-            const auto code = func( request.body ) ? Code::OK :
-                                                     Code::BAD_REQUEST;
+            const auto code = func( request.body ) ? Code::OK
+                                                   : Code::BAD_REQUEST;
             return make_ready_future( Response{ code } );
         };
-
         if( !handle( Method::PUT, endpoint, futureFunc ))
             return false;
 
@@ -237,15 +247,15 @@ public:
         return handleGET( endpoint, serializable.getSchema(), func );
     }
 
-    bool handleGET( std::string endpoint, const std::string& schema,
+    bool handleGET( const std::string& endpoint, const std::string& schema,
                     const GETFunc& func )
     {
         _checkEndpointName( endpoint );
-        const auto futureFunc = [ func ]( const Request& )
-        {
-            return make_ready_future( Response{ Code::OK, func() } );
-        };
 
+        const auto futureFunc = [func]( const Request& )
+        {
+            return make_ready_future( Response{ Code::OK, func(), JSON_TYPE } );
+        };
         if( !handle( Method::GET, endpoint, futureFunc ))
             return false;
 
@@ -278,9 +288,10 @@ public:
     }
 
 protected:
-    // key stores endpoints lower-case, hyphenated with '/' separators
+    // key stores endpoints of Serializable objects lower-case, hyphenated,
+    // with '/' separators
     // must be an ordered map in order to iterate from the most specific path
-    typedef std::map< std::string, RESTFunc, 
+    typedef std::map< std::string, RESTFunc,
                       std::greater< std::string >> FuncMap;
     typedef std::map< std::string, std::string > SchemaMap;
 
@@ -307,43 +318,42 @@ protected:
         return inprocURI.str();
     }
 
-    std::string _returnRegistry() const
+    std::string _getRegistry() const
     {
         Json::Value body( Json::objectValue );
         for( const auto& i : _methods[int(Method::GET)] )
             body[i.first].append( "GET" );
-        for( const auto& i : _methods[int(Method::PUT)] )
-            body[i.first].append( "PUT" );
         for( const auto& i : _methods[int(Method::POST)] )
             body[i.first].append( "POST" );
-        for( const auto& i : _methods[int(Method::DELETE)] )
-            body[i.first].append( "DELETE" );
+        for( const auto& i : _methods[int(Method::PUT)] )
+            body[i.first].append( "PUT" );
         for( const auto& i : _methods[int(Method::PATCH)] )
             body[i.first].append( "PATCH" );
+        for( const auto& i : _methods[int(Method::DELETE)] )
+            body[i.first].append( "DELETE" );
         return body.toStyledString();
     }
 
-    Response _getSchemaResponse( const std::string& endpoint ) const
+    std::string _getAllowedMethods( const std::string& endpoint ) const
     {
-        const auto it = _schemas.find( endpoint );
-        if( it == _schemas.end( ))
-            return Response{ Code::NOT_FOUND };
-        return Response{ Code::OK, it->second };
-    }
-
-    std::string _removeEndpointFromPath( const std::string& endpoint,
-                                         const std::string& path )
-    {
-        if( endpoint.size() >= path.size( ))
-            return std::string();
-
-        return path.substr( endpoint.size() + 1, path.size( ));
+        std::string methods;
+        if( _methods[int(Method::GET)].count( endpoint ))
+            methods.append( methods.empty() ? "GET" : ", GET" );
+        if( _methods[int(Method::POST)].count( endpoint ))
+            methods.append( methods.empty() ? "POST" : ", POST" );
+        if( _methods[int(Method::PUT)].count( endpoint ))
+            methods.append( methods.empty() ? "PUT" : ", PUT" );
+        if( _methods[int(Method::PATCH)].count( endpoint ))
+            methods.append( methods.empty() ? "PATCH" : ", PATCH" );
+        if( _methods[int(Method::DELETE)].count( endpoint ))
+            methods.append( methods.empty() ? "DELETE" : ", DELETE" );
+        return methods;
     }
 
     void _processRequest( Message& message )
     {
         const auto method = message.request.method;
-//      remove leading '/' except for request to '/'
+        // remove leading '/' except for request to '/'
         const std::string path = ( message.request.path != "/" ) ?
                    message.request.path.substr( 1 ) : message.request.path;
 
@@ -351,46 +361,56 @@ protected:
         {
             if( path == REQUEST_REGISTRY )
             {
-                Response response{ Code::OK, _returnRegistry() };
+                const Response response{ Code::OK, _getRegistry(), JSON_TYPE };
                 message.response = make_ready_future( response );
                 return;
             }
 
             if( _endsWithSchema( path ))
             {
-                const auto key = path.substr( 0, path.find_last_of( '/' ));
-                const auto response = _getSchemaResponse( key );
-                if( response.code == http::Code::OK )
+                const auto endpoint = path.substr( 0, path.find_last_of( '/' ));
+                const auto it = _schemas.find( endpoint );
+                if( it != _schemas.end( ))
                 {
+                    const Response response{ Code::OK, it->second, JSON_TYPE };
                     message.response = make_ready_future( response );
                     return;
                 }
             }
         }
 
-        const auto& funcMap = _methods[int(method)];
-        const auto it = std::find_if( funcMap.begin(), funcMap.end(),
-                                      [&path]( const FuncMap::value_type& pair )
+        const auto beginsWithPath = [&path]( const FuncMap::value_type& pair )
         {
             return path.find( pair.first ) == 0;
-        });
-
-        if( it == funcMap.end( ))
+        };
+        const auto& funcMap = _methods[int(method)];
+        const auto it = std::find_if( funcMap.begin(), funcMap.end(),
+                                      beginsWithPath );
+        if( it != funcMap.end( ))
         {
-            message.response = make_ready_future( Response{ Code::NOT_FOUND } );
+            const auto& endpoint = it->first;
+            const auto& func = it->second;
+
+            const auto pathStripped = _removeEndpointFromPath( endpoint, path );
+            if( pathStripped.empty() || *endpoint.rbegin() == '/' )
+            {
+                message.request.path = pathStripped;
+                message.response = func( message.request );
+                return;
+            }
+        }
+
+        // return informative error 405 "Method Not Allowed" if possible
+        const auto allowedMethods = _getAllowedMethods( path );
+        if( !allowedMethods.empty( ))
+        {
+            Response response;
+            response.code = Code::NOT_SUPPORTED;
+            response.headers[Header::ALLOW] = allowedMethods;
+            message.response = make_ready_future( response );
             return;
         }
 
-        const auto& endpoint = it->first;
-        const auto& func = it->second;
-        const auto pathStripped = _removeEndpointFromPath( endpoint,
-                                                    message.request.path );
-        if( pathStripped.empty() || *endpoint.rbegin() == '/' )
-        {
-            message.request.path = pathStripped;
-            message.response = func( message.request );
-            return;
-        }
         message.response = make_ready_future( Response{ Code::NOT_FOUND } );
     }
 };

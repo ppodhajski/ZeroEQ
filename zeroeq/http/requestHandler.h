@@ -8,7 +8,7 @@
 #define ZEROEQ_HTTP_REQUESTHANDLER_H
 
 #include <zeroeq/http/response.h> // member
-#include <zeroeq/http/request.h> // member
+#include <zeroeq/http/request.h>  // member
 
 #include <boost/network/protocol/http/server.hpp>
 #include <future>

@@ -1,5 +1,6 @@
 /* Copyright (c) 2017, EPFL/Blue Brain Project
  *                     Stefan.Eilemann@epfl.ch
+ *                     Raphael.Dumusc@epfl.ch
  */
 
 #ifndef ZEROEQ_HTTP_REQUEST_H
@@ -15,9 +16,9 @@ namespace http
 /** HTTP method used in a Request. */
 enum class Method
 {
-    PUT,
     GET,
     POST,
+    PUT,
     PATCH,
     DELETE,
     ALL //!< @internal, must be last
