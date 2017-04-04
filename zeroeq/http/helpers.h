@@ -6,6 +6,8 @@
 #ifndef ZEROEQ_HTTP_HELPERS_H
 #define ZEROEQ_HTTP_HELPERS_H
 
+#include <zeroeq/http/response.h>
+
 #include <future>
 
 namespace zeroeq
@@ -13,14 +15,18 @@ namespace zeroeq
 namespace http
 {
 
-/** @return ready future wrapping the value passed. */
-template<typename T>
-std::future<T> make_ready_future( const T value )
+/**
+ * @return ready future wrapping an HTTP Response constructed with
+ *         the values passed.
+ */
+template< typename ...Args >
+std::future< Response > make_ready_response( Args&& ...args )
 {
-    std::promise<T> promise;
-    promise.set_value( value );
+    std::promise< Response > promise;
+    promise.set_value( Response( std::forward< Args >( args )... ));
     return promise.get_future();
 }
+
 }
 }
 

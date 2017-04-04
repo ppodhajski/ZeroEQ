@@ -77,6 +77,14 @@ struct Response
         , body{ body_ }
         , headers{{ Header::CONTENT_TYPE, contentType }}
     {}
+
+    /** Construct a Response with a given code, payload and map of headers. */
+    Response( const Code code_, const std::string& body_,
+              std::map< Header, std::string > headers_ )
+        : code{ code_ }
+        , body{ body_ }
+        , headers{{ std::move( headers_ )}}
+    {}
 };
 
 }

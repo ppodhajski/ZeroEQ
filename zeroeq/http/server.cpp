@@ -231,7 +231,7 @@ public:
         {
             const auto code = func( request.body ) ? Code::OK
                                                    : Code::BAD_REQUEST;
-            return make_ready_future( Response{ code } );
+            return make_ready_response( code );
         };
         if( !handle( Method::PUT, endpoint, futureFunc ))
             return false;
@@ -254,7 +254,7 @@ public:
 
         const auto futureFunc = [func]( const Request& )
         {
-            return make_ready_future( Response{ Code::OK, func(), JSON_TYPE } );
+            return make_ready_response( Code::OK, func(), JSON_TYPE );
         };
         if( !handle( Method::GET, endpoint, futureFunc ))
             return false;
@@ -361,8 +361,9 @@ protected:
         {
             if( path == REQUEST_REGISTRY )
             {
-                const Response response{ Code::OK, _getRegistry(), JSON_TYPE };
-                message.response = make_ready_future( response );
+                message.response = make_ready_response( Code::OK,
+                                                        _getRegistry(),
+                                                        JSON_TYPE );
                 return;
             }
 
@@ -372,8 +373,9 @@ protected:
                 const auto it = _schemas.find( endpoint );
                 if( it != _schemas.end( ))
                 {
-                    const Response response{ Code::OK, it->second, JSON_TYPE };
-                    message.response = make_ready_future( response );
+                    message.response = make_ready_response( Code::OK,
+                                                            it->second,
+                                                            JSON_TYPE );
                     return;
                 }
             }
@@ -404,14 +406,15 @@ protected:
         const auto allowedMethods = _getAllowedMethods( path );
         if( !allowedMethods.empty( ))
         {
-            Response response;
-            response.code = Code::NOT_SUPPORTED;
-            response.headers[Header::ALLOW] = allowedMethods;
-            message.response = make_ready_future( response );
+            using Headers = std::map< Header, std::string>;
+            Headers headers{{ Header::ALLOW, allowedMethods }};
+            message.response = make_ready_response( Code::NOT_SUPPORTED,
+                                                    std::string(),
+                                                    std::move( headers ));
             return;
         }
 
-        message.response = make_ready_future( Response{ Code::NOT_FOUND } );
+        message.response = make_ready_response( Code::NOT_FOUND );
     }
 };
 

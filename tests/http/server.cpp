@@ -69,8 +69,7 @@ const auto echoFunc = []( const zeroeq::http::Request& request )
             body.append( ":" );
         body.append( request.body );
     }
-    return zeroeq::http::make_ready_future(
-                zeroeq::http::Response{ zeroeq::http::Code::OK, body } );
+    return zeroeq::http::make_ready_response( zeroeq::http::Code::OK, body );
 };
 
 const Response response200{ ServerReponse::ok, "" };
@@ -568,8 +567,8 @@ BOOST_AUTO_TEST_CASE(handle_all)
     server.handle( zeroeq::http::Method::GET, "nocontent",
                    []( const zeroeq::http::Request& )
     {
-        zeroeq::http::Response response{ zeroeq::http::Code::NO_CONTENT };
-        return zeroeq::http::make_ready_future( response );
+        return zeroeq::http::make_ready_response(
+                             zeroeq::http::Code::NO_CONTENT );
     });
 
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
@@ -607,10 +606,8 @@ BOOST_AUTO_TEST_CASE(handle_root)
     server.handle( zeroeq::http::Method::GET, "/",
                    [this]( const zeroeq::http::Request& )
     {
-        zeroeq::http::Response response{ zeroeq::http::Code::OK };
-        response.body = "homepage";
-        response.headers[zeroeq::http::Header::CONTENT_TYPE] = "text/html";
-        return zeroeq::http::make_ready_future( response );
+        return zeroeq::http::make_ready_response( zeroeq::http::Code::OK,
+                                                  "homepage", "text/html" );
     });
 
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
@@ -678,7 +675,7 @@ BOOST_AUTO_TEST_CASE(handle_path)
     thread.join();
 }
 
-BOOST_AUTO_TEST_CASE(headers)
+BOOST_AUTO_TEST_CASE(handle_headers)
 {
     bool running = true;
     const std::string allow = "GET, POST, PUT, PATCH, DELETE";
@@ -694,14 +691,16 @@ BOOST_AUTO_TEST_CASE(headers)
         server.handle( zeroeq::http::Method( method ), "test/",
                        [&]( const zeroeq::http::Request& request)
         {
-            zeroeq::http::Response response{ zeroeq::http::Code::OK };
-            response.headers[zeroeq::http::Header::ALLOW] = allow;
-            response.headers[zeroeq::http::Header::CONTENT_TYPE] = type;
-            response.headers[zeroeq::http::Header::LAST_MODIFIED] = modified;
-            response.headers[zeroeq::http::Header::LOCATION] = location;
-            response.headers[zeroeq::http::Header::RETRY_AFTER] = retry;
-            response.body = request.path + ":" + request.body;
-            return zeroeq::http::make_ready_future( response );
+            std::map< zeroeq::http::Header, std::string > headers;
+            headers[zeroeq::http::Header::ALLOW] = allow;
+            headers[zeroeq::http::Header::CONTENT_TYPE] = type;
+            headers[zeroeq::http::Header::LAST_MODIFIED] = modified;
+            headers[zeroeq::http::Header::LOCATION] = location;
+            headers[zeroeq::http::Header::RETRY_AFTER] = retry;
+            const auto body = request.path + ":" + request.body;
+            return zeroeq::http::make_ready_response( zeroeq::http::Code::OK,
+                                                      body,
+                                                      std::move( headers ));
         });
     }
 
@@ -860,8 +859,7 @@ BOOST_AUTO_TEST_CASE(event_schema)
     server.handle( zeroeq::http::Method::GET, "bla/boo/",
                    [this]( const zeroeq::http::Request& )
     {
-        zeroeq::http::Response response{ zeroeq::http::Code::OK };
-        return zeroeq::http::make_ready_future( response );
+        return zeroeq::http::make_ready_response( zeroeq::http::Code::OK );
     });
 
     bool running = true;
