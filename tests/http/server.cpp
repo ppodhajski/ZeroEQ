@@ -603,7 +603,65 @@ BOOST_AUTO_TEST_CASE(handle_root)
     bool running = true;
     zeroeq::http::Server server;
 
-    server.handle( zeroeq::http::Method::GET, "/",
+    server.handle( zeroeq::http::Method::GET, "",
+                   [this]( const zeroeq::http::Request& )
+    {
+        return zeroeq::http::make_ready_response( zeroeq::http::Code::OK,
+                                                  "homepage", "text/html" );
+    });
+    server.handlePUT( "", [] { return true; });
+
+    std::thread thread( [&]() { while( running ) server.receive( 100 ); });
+    Client client( server.getURI( ));
+
+    const Response expectedResponse{ ServerReponse::ok, "homepage",
+                                     {{ "Content-Type", "text/html" }}};
+    client.check( zeroeq::http::Method::GET, "", "", expectedResponse,
+                  __LINE__  );
+    // note: cppnetlib makes no difference between "" and "/", so the ""
+    // handler is also called for a "/" request.
+    client.check( zeroeq::http::Method::GET, "/", "", expectedResponse,
+                  __LINE__  );
+    client.check( zeroeq::http::Method::GET, "//", "", error404,
+                  __LINE__  );
+    client.checkPUT( "", "", response200, __LINE__ );
+
+    running = false;
+    thread.join();
+}
+
+BOOST_AUTO_TEST_CASE(handle_root_path)
+{
+    bool running = true;
+    zeroeq::http::Server server;
+    server.handle( zeroeq::http::Method::GET , "/", echoFunc );
+
+    std::thread thread( [&]() { while( running ) server.receive( 100 ); });
+    Client client( server.getURI( ));
+
+    client.checkGET( "/", { ServerReponse::ok, "" }, __LINE__ );
+    const char* registry =
+R"({
+   "/" : [ "GET" ]
+}
+)";
+    client.checkGET( "/registry", _buildResponse( registry ),  __LINE__ );
+    client.checkGET( "/ABC", { ServerReponse::ok, "ABC" }, __LINE__ );
+    client.checkGET( "/", { ServerReponse::ok, "" }, __LINE__ );
+    client.checkGET( "//", { ServerReponse::ok, "/" }, __LINE__ );
+    client.checkGET( "///", { ServerReponse::ok, "//" }, __LINE__ );
+    client.checkGET( "/abc/def/", { ServerReponse::ok, "abc/def/" }, __LINE__ );
+
+    running = false;
+    thread.join();
+}
+
+BOOST_AUTO_TEST_CASE(handle_root_and_root_path)
+{
+    bool running = true;
+    zeroeq::http::Server server;
+    server.handle( zeroeq::http::Method::GET , "/", echoFunc );
+    server.handle( zeroeq::http::Method::GET, "",
                    [this]( const zeroeq::http::Request& )
     {
         return zeroeq::http::make_ready_response( zeroeq::http::Code::OK,
@@ -613,14 +671,20 @@ BOOST_AUTO_TEST_CASE(handle_root)
     std::thread thread( [&]() { while( running ) server.receive( 100 ); });
     Client client( server.getURI( ));
 
-    const Response expectedResponse{ ServerReponse::ok, "homepage",
+    const Response htmlResponse{ ServerReponse::ok, "homepage",
                                      {{ "Content-Type", "text/html" }}};
-    client.check( zeroeq::http::Method::GET, "/", "", expectedResponse,
-                  __LINE__  );
+    // note: cppnetlib makes no difference between "" and "/", so the ""
+    // handler is called instead of the "/" one for a "/" request.
+    client.checkGET( "", htmlResponse, __LINE__  );
+    client.checkGET( "/", htmlResponse, __LINE__  );
+    client.checkGET( "//", { ServerReponse::ok, "/" }, __LINE__ );
+    client.checkGET( "///", { ServerReponse::ok, "//" }, __LINE__ );
+    client.checkGET( "/ABC", { ServerReponse::ok, "ABC" }, __LINE__ );
 
     running = false;
     thread.join();
 }
+
 
 BOOST_AUTO_TEST_CASE(handle_path)
 {
@@ -918,11 +982,6 @@ BOOST_AUTO_TEST_CASE(event_registry_name)
                                          [] { return std::string(); } ),
                        std::runtime_error );
     BOOST_CHECK_THROW( server.handlePUT( "registry", [] { return true; } ),
-                       std::runtime_error );
-
-    BOOST_CHECK_THROW( server.handleGET( "", [] { return std::string(); } ),
-                       std::runtime_error );
-    BOOST_CHECK_THROW( server.handlePUT( "", [] { return true; } ),
                        std::runtime_error );
 
     BOOST_CHECK( server.handleGET( "foo/registry",

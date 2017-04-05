@@ -72,9 +72,6 @@ const std::string REQUEST_SCHEMA = "schema";
 
 void _checkEndpointName( const std::string& endpoint )
 {
-    if( endpoint.empty( ))
-        ZEROEQTHROW( std::runtime_error( "endpoint name cannot be empty" ));
-
     if( endpoint == REQUEST_REGISTRY )
         ZEROEQTHROW( std::runtime_error(
                          "'registry' not allowed as endpoint name" ));
@@ -91,6 +88,9 @@ bool _endsWithSchema( const std::string& uri )
 std::string _removeEndpointFromPath( const std::string& endpoint,
                                      const std::string& path )
 {
+    if( endpoint == "/" )
+        return path;
+
     if( endpoint.size() >= path.size( ))
         return std::string();
 
@@ -236,7 +236,8 @@ public:
         if( !handle( Method::PUT, endpoint, futureFunc ))
             return false;
 
-        registerSchema( endpoint, schema );
+        if( !schema.empty( ))
+            registerSchema( endpoint, schema );
         return true;
     }
 
@@ -353,9 +354,8 @@ protected:
     void _processRequest( Message& message )
     {
         const auto method = message.request.method;
-        // remove leading '/' except for request to '/'
-        const std::string path = ( message.request.path != "/" ) ?
-                   message.request.path.substr( 1 ) : message.request.path;
+        // remove leading '/'
+        const auto path = message.request.path.substr( 1 );
 
         if( method == Method::GET )
         {
@@ -383,7 +383,8 @@ protected:
 
         const auto beginsWithPath = [&path]( const FuncMap::value_type& pair )
         {
-            return path.find( pair.first ) == 0;
+            const auto& endpoint = pair.first;
+            return path.find( endpoint ) == 0;
         };
         const auto& funcMap = _methods[int(method)];
         const auto it = std::find_if( funcMap.begin(), funcMap.end(),
@@ -400,6 +401,16 @@ protected:
                 message.response = func( message.request );
                 return;
             }
+        }
+
+        // if "/" is registered as an endpoint it should be passed all
+        // unhandled requests.
+        if( funcMap.count( "/" ))
+        {
+            const auto& func = funcMap.at( "/" );
+            message.request.path = path;
+            message.response = func( message.request );
+            return;
         }
 
         // return informative error 405 "Method Not Allowed" if possible
