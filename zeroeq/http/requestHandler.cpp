@@ -154,7 +154,7 @@ private:
         }
         catch( std::future_error& error )
         {
-            response.code = http::INTERNAL_SERVER_ERROR;
+            response.code = http::Code::INTERNAL_SERVER_ERROR;
             ZEROEQINFO << "Error during ConnectionHandler::_handleRequest: "
                        << error.what() << std::endl;
         }
